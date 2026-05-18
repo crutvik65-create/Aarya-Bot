@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: propvoice-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app -k uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: SARVAM_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: RAG_DIR
+        value: ./RAG
+      - key: CHROMA_PERSIST_DIR
+        value: ./chroma_db
+      - key: WORKERS
+        value: 1
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /api/health

@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PropVoice — Real Estate Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+/* ── Reset & Variables ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0e0f11;
+  --surface:   #16181c;
+  --surface2:  #1e2128;
+  --surface3:  #252930;
+  --border:    #2e3340;
+  --border2:   #3d4455;
+  --gold:      #c9a96e;
+  --gold2:     #e8c990;
+  --gold-dim:  #8a6f3e;
+  --text:      #eeeae3;
+  --text2:     #9fa3ac;
+  --text3:     #636878;
+  --green:     #4eca8b;
+  --red:       #e05656;
+  --blue:      #5b9cf6;
+  --radius:    12px;
+  --radius-lg: 20px;
+  --shadow:    0 4px 24px rgba(0,0,0,0.4);
+}
+
+html { font-size: 15px; }
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── Header ────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  gap: 12px;
+}
+
+.logo { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.logo-icon {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, var(--gold-dim), var(--gold));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 17px;
+}
+.logo-text { font-family: 'DM Serif Display', serif; font-size: 1.25rem; color: var(--gold2); letter-spacing: 0.02em; }
+.logo-sub { font-size: 0.7rem; color: var(--text3); letter-spacing: 0.05em; text-transform: uppercase; margin-top: 1px; }
+
+.lang-selector { display: flex; align-items: center; gap: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 4px 6px; }
+.lang-btn { padding: 5px 11px; border: none; border-radius: 7px; background: transparent; color: var(--text2); font-family: 'DM Sans', sans-serif; font-size: 0.8rem; font-weight: 500; cursor: pointer; transition: all 0.18s; white-space: nowrap; }
+.lang-btn:hover { color: var(--text); background: var(--surface3); }
+.lang-btn.active { background: var(--gold-dim); color: var(--gold2); }
+.lang-label { font-size: 0.72rem; color: var(--text3); padding: 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ── Layout ────────────────────────────────────────────────── */
+.layout { display: flex; flex: 1; height: calc(100vh - 63px); overflow: hidden; }
+
+/* ── Sidebar ────────────────────────────────────────────────── */
+.sidebar { width: 270px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-header { padding: 18px 18px 10px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text3); font-weight: 600; border-bottom: 1px solid var(--border); }
+.pdf-list { flex: 1; overflow-y: auto; padding: 10px 10px; }
+.pdf-item { display: flex; align-items: center; gap: 10px; padding: 10px 10px; border-radius: var(--radius); cursor: pointer; transition: all 0.16s; margin-bottom: 3px; border: 1px solid transparent; position: relative; }
+.pdf-item:hover { background: var(--surface2); }
+.pdf-item.active { background: var(--surface2); border-color: var(--gold-dim); }
+.pdf-item.active::before { content: ''; position: absolute; left: 0; top: 20%; bottom: 20%; width: 3px; background: var(--gold); border-radius: 0 2px 2px 0; }
+.pdf-thumb { width: 36px; height: 36px; border-radius: 8px; background: var(--surface3); display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; border: 1px solid var(--border); }
+.pdf-item.active .pdf-thumb { background: rgba(201, 169, 110, 0.15); border-color: var(--gold-dim); }
+.pdf-info { flex: 1; min-width: 0; }
+.pdf-name { font-size: 0.82rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pdf-item.active .pdf-name { color: var(--gold2); }
+.pdf-badge { font-size: 0.65rem; color: var(--text3); margin-top: 2px; }
+.pdf-radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border2); flex-shrink: 0; transition: all 0.15s; position: relative; }
+.pdf-item.active .pdf-radio { border-color: var(--gold); }
+.pdf-item.active .pdf-radio::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--gold); }
+
+.loading-pdfs { padding: 24px 18px; text-align: center; color: var(--text3); font-size: 0.82rem; }
+.spinner-sm { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border2); border-top-color: var(--gold); border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: middle; }
+
+/* ── Chat area ──────────────────────────────────────────────── */
+.chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.property-banner { padding: 12px 24px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.prop-name { font-family: 'DM Serif Display', serif; font-size: 1.05rem; color: var(--gold2); }
+.prop-hint { font-size: 0.75rem; color: var(--text3); margin-top: 1px; }
+.lang-badge { padding: 4px 10px; border-radius: 20px; background: rgba(201,169,110,0.12); border: 1px solid var(--gold-dim); color: var(--gold); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+
+.messages { flex: 1; overflow-y: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 20px; }
+
+.welcome { text-align: center; padding: 48px 24px; max-width: 460px; margin: 0 auto; }
+.welcome-icon { font-size: 3.5rem; margin-bottom: 16px; filter: drop-shadow(0 0 20px rgba(201,169,110,0.3)); }
+.welcome h2 { font-family: 'DM Serif Display', serif; font-size: 1.6rem; color: var(--gold2); margin-bottom: 10px; }
+.welcome p { color: var(--text2); font-size: 0.9rem; line-height: 1.6; }
+.welcome-hints { margin-top: 24px; display: flex; flex-direction: column; gap: 8px; }
+.hint-chip { padding: 9px 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; color: var(--text2); font-size: 0.82rem; cursor: pointer; transition: all 0.16s; text-align: left; }
+.hint-chip:hover { background: var(--surface3); border-color: var(--gold-dim); color: var(--text); }
+
+.msg { display: flex; gap: 12px; max-width: 720px; animation: fadeUp 0.2s ease; }
+.msg.user { flex-direction: row-reverse; align-self: flex-end; }
+.msg.assistant { align-self: flex-start; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.msg-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; margin-top: 2px; }
+.msg.user .msg-avatar { background: var(--surface3); border: 1px solid var(--border2); color: var(--text2); }
+.msg.assistant .msg-avatar { background: rgba(201,169,110,0.15); border: 1px solid var(--gold-dim); }
+
+.msg-body { max-width: calc(100% - 44px); }
+.msg-bubble { padding: 12px 16px; border-radius: var(--radius); font-size: 0.88rem; line-height: 1.65; }
+.msg.user .msg-bubble { background: var(--surface3); border: 1px solid var(--border2); border-radius: var(--radius) var(--radius) 4px var(--radius); color: var(--text); }
+.msg.assistant .msg-bubble { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius) var(--radius) var(--radius) 4px; }
+.msg-time { font-size: 0.68rem; color: var(--text3); margin-top: 4px; padding: 0 4px; }
+.msg.user .msg-time { text-align: right; }
+
+.msg-audio { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+.play-btn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--gold-dim); background: rgba(201,169,110,0.1); color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; transition: all 0.15s; flex-shrink: 0; }
+.play-btn:hover { background: rgba(201,169,110,0.22); }
+.play-btn.playing { background: rgba(201,169,110,0.22); }
+.audio-waveform { flex: 1; height: 24px; display: flex; align-items: center; gap: 2px; }
+.wave-bar { width: 3px; border-radius: 2px; background: var(--border2); transition: height 0.15s, background 0.15s; }
+.audio-label { font-size: 0.7rem; color: var(--text3); white-space: nowrap; }
+
+.typing-indicator { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius) var(--radius) var(--radius) 4px; width: fit-content; }
+.typing-dots { display: flex; gap: 4px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--gold-dim); animation: bounce 1.2s infinite; }
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes bounce { 0%,60%,100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+/* ── Input bar ──────────────────────────────────────────────── */
+.input-bar { padding: 16px 24px; background: var(--surface); border-top: 1px solid var(--border); }
+.input-row { display: flex; align-items: flex-end; gap: 10px; background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--radius-lg); padding: 10px 12px; transition: border-color 0.2s; }
+.input-row:focus-within { border-color: var(--gold-dim); }
+#chat-input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 0.9rem; resize: none; min-height: 22px; max-height: 120px; line-height: 1.5; }
+#chat-input::placeholder { color: var(--text3); }
+
+.send-btn { width: 36px; height: 36px; border-radius: 10px; border: none; background: var(--gold-dim); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 15px; transition: all 0.16s; flex-shrink: 0; }
+.send-btn:hover:not(:disabled) { background: var(--gold); }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.voice-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border2); background: var(--surface3); color: var(--text2); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all 0.16s; flex-shrink: 0; position: relative; }
+.voice-btn:hover:not(:disabled) { border-color: var(--gold-dim); color: var(--gold); background: rgba(201,169,110,0.08); }
+.voice-btn.recording { border-color: var(--red); background: rgba(224,86,86,0.12); color: var(--red); animation: pulse-border 1s infinite; }
+@keyframes pulse-border { 0%,100% { box-shadow: 0 0 0 0 rgba(224,86,86,0.4); } 50% { box-shadow: 0 0 0 6px rgba(224,86,86,0); } }
+.voice-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rec-timer { position: absolute; top: -22px; left: 50%; transform: translateX(-50%); background: var(--red); color: #fff; font-size: 0.65rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+
+.input-hint { font-size: 0.7rem; color: var(--text3); margin-top: 8px; text-align: center; }
+.no-pdf-msg { font-size: 0.82rem; color: var(--red); text-align: center; padding: 10px; background: rgba(224,86,86,0.08); border-radius: var(--radius); border: 1px solid rgba(224,86,86,0.2); margin-bottom: 10px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 768px) { .sidebar { width: 220px; } .messages { padding: 16px; } .lang-label { display: none; } }
+@media (max-width: 600px) { .sidebar { position: fixed; left: -220px; z-index: 200; height: calc(100vh - 63px); top: 63px; transition: left 0.25s; } .sidebar.open { left: 0; } .layout { flex-direction: column; } .lang-btn { padding: 5px 8px; font-size: 0.75rem; } }
+
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface3); border: 1px solid var(--border2); border-radius: var(--radius); padding: 12px 18px; font-size: 0.82rem; color: var(--text); z-index: 1000; animation: slideIn 0.2s ease; max-width: 300px; }
+.toast.error { border-color: var(--red); color: var(--red); }
+.toast.success { border-color: var(--green); color: var(--green); }
+@keyframes slideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏡</div>
+    <div>
+      <div class="logo-text">PropVoice</div>
+      <div class="logo-sub">Real Estate AI</div>
+    </div>
+  </div>
+  <div class="lang-selector">
+    <span class="lang-label">Output:</span>
+    <button class="lang-btn active" data-lang="english">EN</button>
+    <button class="lang-btn" data-lang="hindi">हिं</button>
+    <button class="lang-btn" data-lang="gujarati">ગુ</button>
+    <button class="lang-btn" data-lang="telugu">తె</button>
+    <button class="lang-btn" data-lang="tamil">த</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">📂 Properties</div>
+    <div class="pdf-list" id="pdf-list">
+      <div class="loading-pdfs"><span class="spinner-sm"></span>Loading properties...</div>
+    </div>
+  </aside>
+
+  <div class="chat-area">
+    <div class="property-banner" id="prop-banner">
+      <div>
+        <div class="prop-name" id="prop-name">Select a Property →</div>
+        <div class="prop-hint" id="prop-hint">Choose a listing from the sidebar to start chatting</div>
+      </div>
+      <div class="lang-badge" id="lang-badge">English</div>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome-screen">
+        <div class="welcome-icon">🏘️</div>
+        <h2>Ask anything about a property</h2>
+        <p>Select a property from the sidebar, then ask questions via text or voice. I'll always reply with both text and audio in your chosen language.</p>
+        <div class="welcome-hints">
+          <div class="hint-chip" onclick="useHint(this)">What is the price of this flat?</div>
+          <div class="hint-chip" onclick="useHint(this)">How many bedrooms does it have?</div>
+          <div class="hint-chip" onclick="useHint(this)">What amenities are available?</div>
+          <div class="hint-chip" onclick="useHint(this)">Is this property ready to move in?</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <div id="no-pdf-warning" class="no-pdf-msg" style="display:none;">
+        ⚠️ Please select a property from the sidebar first
+      </div>
+      <div class="input-row">
+        <textarea id="chat-input" placeholder="Ask about this property... (Enter to send)" rows="1"></textarea>
+        <button class="voice-btn" id="voice-btn" title="Hold to record voice" disabled>🎙️</button>
+        <button class="send-btn" id="send-btn" disabled title="Send">➤</button>
+      </div>
+      <div class="input-hint">💬 Text or 🎙️ voice input — always get text + audio reply in your selected language</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── API base: auto-detects same host/port as the page was served from ─────────
+// When served via FastAPI (http://localhost:8000/), this will be
+// "http://localhost:8000" — no hardcoding needed.
+const API_BASE = window.location.origin;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let selectedPdf = null;
+let selectedLanguage = 'english';
+let chatHistory = [];
+let isLoading = false;
+let mediaRecorder = null;
+let audioChunks = [];
+let recordTimer = null;
+let recordSeconds = 0;
+let currentAudio = null;
+
+const LANG_LABELS = {
+  english: 'English', hindi: 'हिंदी',
+  gujarati: 'ગુજરાતી', telugu: 'తెలుగు', tamil: 'தமிழ்'
+};
+
+const messagesEl  = document.getElementById('messages');
+const chatInput   = document.getElementById('chat-input');
+const sendBtn     = document.getElementById('send-btn');
+const voiceBtn    = document.getElementById('voice-btn');
+const propName    = document.getElementById('prop-name');
+const propHint    = document.getElementById('prop-hint');
+const langBadge   = document.getElementById('lang-badge');
+const pdfList     = document.getElementById('pdf-list');
+const noPdfWarn   = document.getElementById('no-pdf-warning');
+
+async function init() {
+  await loadPdfs();
+  setupInputAutoResize();
+}
+
+async function loadPdfs() {
+  try {
+    const res = await fetch(`${API_BASE}/api/pdfs`);
+    const data = await res.json();
+    renderPdfs(data.pdfs || []);
+  } catch (e) {
+    pdfList.innerHTML = `<div class="loading-pdfs" style="color:var(--red)">⚠️ Could not connect to API.<br/><small>${e.message}</small></div>`;
+  }
+}
+
+function renderPdfs(pdfs) {
+  if (!pdfs.length) {
+    pdfList.innerHTML = `<div class="loading-pdfs">No documents found.<br/>Add .docx files to the <code>RAG/</code> folder.</div>`;
+    return;
+  }
+  const icons = ['🏠','🏢','🏗️','🏡','🏘️','🏬','🏭','🏛️','🏪','🏩','🏨'];
+  pdfList.innerHTML = pdfs.map((pdf, i) => `
+    <div class="pdf-item" data-id="${pdf.id}" data-name="${pdf.display_name}" onclick="selectPdf(this)">
+      <div class="pdf-thumb">${icons[i % icons.length]}</div>
+      <div class="pdf-info">
+        <div class="pdf-name">${pdf.display_name}</div>
+        <div class="pdf-badge">Property ${i + 1}</div>
+      </div>
+      <div class="pdf-radio"></div>
+    </div>
+  `).join('');
+}
+
+function selectPdf(el) {
+  document.querySelectorAll('.pdf-item').forEach(i => i.classList.remove('active'));
+  el.classList.add('active');
+  selectedPdf = el.dataset.id;
+  const name = el.dataset.name;
+
+  propName.textContent = name;
+  propHint.textContent = `Ask anything about this property · Replies in ${LANG_LABELS[selectedLanguage]}`;
+  noPdfWarn.style.display = 'none';
+  sendBtn.disabled = false;
+  voiceBtn.disabled = false;
+
+  chatHistory = [];
+  messagesEl.innerHTML = '';
+  const w = document.createElement('div');
+  w.className = 'welcome'; w.id = 'welcome-screen';
+  w.innerHTML = `
+    <div class="welcome-icon">🏘️</div>
+    <h2>${name}</h2>
+    <p>Ready to answer your questions in <strong>${LANG_LABELS[selectedLanguage]}</strong>.</p>
+    <div class="welcome-hints">
+      <div class="hint-chip" onclick="useHint(this)">What is the price of this flat?</div>
+      <div class="hint-chip" onclick="useHint(this)">How many bedrooms does it have?</div>
+      <div class="hint-chip" onclick="useHint(this)">What amenities are available?</div>
+      <div class="hint-chip" onclick="useHint(this)">Is this property ready to move in?</div>
+    </div>`;
+  messagesEl.appendChild(w);
+}
+
+document.querySelectorAll('.lang-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedLanguage = btn.dataset.lang;
+    langBadge.textContent = LANG_LABELS[selectedLanguage];
+    propHint.textContent = selectedPdf
+      ? `Ask anything about this property · Replies in ${LANG_LABELS[selectedLanguage]}`
+      : 'Choose a listing from the sidebar to start chatting';
+    showToast(`Output language: ${LANG_LABELS[selectedLanguage]}`, 'success');
+  });
+});
+
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text || isLoading) return;
+  if (!selectedPdf) { noPdfWarn.style.display = 'block'; chatInput.focus(); return; }
+
+  appendUserMsg(text);
+  chatInput.value = '';
+  chatInput.style.height = 'auto';
+  chatHistory.push({ role: 'user', content: text });
+
+  const typingId = appendTyping();
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: text,
+        pdf_id: selectedPdf,
+        output_language: selectedLanguage,
+        chat_history: chatHistory.slice(-6),
+      }),
+    });
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    const data = await res.json();
+    removeTyping(typingId);
+    const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+    chatHistory.push({ role: 'assistant', content: data.answer_text });
+    if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+  } catch (e) {
+    removeTyping(typingId);
+    appendErrorMsg(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+voiceBtn.addEventListener('mousedown', startRecording);
+voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+voiceBtn.addEventListener('mouseup', stopRecording);
+voiceBtn.addEventListener('mouseleave', stopAndDiscard);
+voiceBtn.addEventListener('touchend', stopRecording);
+
+async function startRecording() {
+  if (!selectedPdf) { noPdfWarn.style.display = 'block'; return; }
+  if (isLoading) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.start(100);
+    voiceBtn.classList.add('recording');
+    voiceBtn.innerHTML = '⏹️';
+    recordSeconds = 0;
+    recordTimer = setInterval(() => {
+      recordSeconds++;
+      const timerEl = voiceBtn.querySelector('.rec-timer') || (() => {
+        const t = document.createElement('div'); t.className = 'rec-timer'; voiceBtn.appendChild(t); return t;
+      })();
+      timerEl.textContent = `${recordSeconds}s`;
+      if (recordSeconds >= 30) stopRecording();
+    }, 1000);
+  } catch (e) {
+    showToast('Microphone access denied', 'error');
+  }
+}
+
+function stopAndDiscard() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  clearInterval(recordTimer);
+  voiceBtn.classList.remove('recording');
+  voiceBtn.innerHTML = '🎙️';
+  const t = voiceBtn.querySelector('.rec-timer'); if (t) t.remove();
+}
+
+async function stopRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+  clearInterval(recordTimer);
+  await new Promise(resolve => {
+    mediaRecorder.onstop = resolve;
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  });
+  voiceBtn.classList.remove('recording');
+  voiceBtn.innerHTML = '🎙️';
+  const t = voiceBtn.querySelector('.rec-timer'); if (t) t.remove();
+  if (audioChunks.length === 0 || recordSeconds < 1) return;
+  const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  await sendVoice(blob);
+}
+
+async function sendVoice(blob) {
+  appendUserMsg('🎙️ Voice message');
+  const typingId = appendTyping();
+  setLoading(true);
+  try {
+    const formData = new FormData();
+    formData.append('audio', blob, 'voice.webm');
+    formData.append('pdf_id', selectedPdf);
+    formData.append('output_language', selectedLanguage);
+    const res = await fetch(`${API_BASE}/api/voice`, { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    const data = await res.json();
+    removeTyping(typingId);
+    chatHistory.push({ role: 'user', content: '(voice input)' });
+    const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+    chatHistory.push({ role: 'assistant', content: data.answer_text });
+    if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+  } catch (e) {
+    removeTyping(typingId);
+    appendErrorMsg(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function hideWelcome() { const w = document.getElementById('welcome-screen'); if (w) w.remove(); }
+
+function appendUserMsg(text) {
+  hideWelcome();
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.innerHTML = `<div class="msg-avatar">👤</div><div class="msg-body"><div class="msg-bubble">${escHtml(text)}</div><div class="msg-time">${timeNow()}</div></div>`;
+  messagesEl.appendChild(el);
+  scrollToBottom();
+}
+
+function appendAssistantMsg(text, audioB64) {
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  const waveHtml = audioB64 ? `
+    <div class="msg-audio">
+      <button class="play-btn" onclick="toggleAudio(this, '${audioB64}')">▶</button>
+      <div class="audio-waveform">${genWaveBars()}</div>
+      <span class="audio-label">Audio reply</span>
+    </div>` : '';
+  el.innerHTML = `<div class="msg-avatar">🤖</div><div class="msg-body"><div class="msg-bubble">${escHtml(text)}</div>${waveHtml}<div class="msg-time">${timeNow()} · ${LANG_LABELS[selectedLanguage]}</div></div>`;
+  messagesEl.appendChild(el);
+  scrollToBottom();
+  return el;
+}
+
+function appendTyping() {
+  const id = 'typing-' + Date.now();
+  const el = document.createElement('div');
+  el.className = 'msg assistant'; el.id = id;
+  el.innerHTML = `<div class="msg-avatar">🤖</div><div class="msg-body"><div class="typing-indicator"><div class="typing-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><span style="font-size:0.78rem;color:var(--text3)">Thinking...</span></div></div>`;
+  messagesEl.appendChild(el);
+  scrollToBottom();
+  return id;
+}
+
+function removeTyping(id) { const el = document.getElementById(id); if (el) el.remove(); }
+
+function appendErrorMsg(msg) {
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  el.innerHTML = `<div class="msg-avatar">⚠️</div><div class="msg-body"><div class="msg-bubble" style="color:var(--red);border-color:rgba(224,86,86,0.3)">Error: ${escHtml(msg)}</div></div>`;
+  messagesEl.appendChild(el);
+  scrollToBottom();
+}
+
+function toggleAudio(btn, b64) {
+  if (currentAudio && !currentAudio.paused) {
+    currentAudio.pause(); currentAudio = null;
+    document.querySelectorAll('.play-btn.playing').forEach(b => { b.classList.remove('playing'); b.textContent = '▶'; });
+    resetWaveBars(btn); return;
+  }
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const blob  = new Blob([bytes], { type: 'audio/wav' });
+  const url   = URL.createObjectURL(blob);
+  currentAudio = new Audio(url);
+  btn.classList.add('playing'); btn.textContent = '⏸';
+  animateWaveBars(btn);
+  currentAudio.play();
+  currentAudio.onended = () => { btn.classList.remove('playing'); btn.textContent = '▶'; resetWaveBars(btn); URL.revokeObjectURL(url); };
+}
+
+function autoPlayAudio(msgEl, b64) {
+  const btn = msgEl.querySelector('.play-btn');
+  if (btn) setTimeout(() => toggleAudio(btn, b64), 300);
+}
+
+function genWaveBars() {
+  return Array.from({length: 20}, () => {
+    const h = 4 + Math.random() * 16;
+    return `<div class="wave-bar" style="height:${h}px"></div>`;
+  }).join('');
+}
+
+function animateWaveBars(btn) {
+  btn.parentElement.querySelectorAll('.wave-bar').forEach(b => { b.style.background = 'var(--gold)'; b.style.height = (4 + Math.random() * 16) + 'px'; });
+}
+function resetWaveBars(btn) {
+  btn.parentElement.querySelectorAll('.wave-bar').forEach(b => { b.style.background = 'var(--border2)'; });
+}
+
+function useHint(el) {
+  if (!selectedPdf) { noPdfWarn.style.display = 'block'; return; }
+  chatInput.value = el.textContent; chatInput.focus();
+}
+
+function setLoading(v) { isLoading = v; sendBtn.disabled = v || !selectedPdf; voiceBtn.disabled = v || !selectedPdf; chatInput.disabled = v; }
+function scrollToBottom() { requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; }); }
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>'); }
+function timeNow() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+function setupInputAutoResize() {
+  chatInput.addEventListener('input', () => { chatInput.style.height = 'auto'; chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px'; });
+  chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+}
+sendBtn.addEventListener('click', sendMessage);
+
+function showToast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`; el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+init();
+</script>
+</body>
+</html>
