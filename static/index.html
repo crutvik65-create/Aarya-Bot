@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PropVoice — Pacifica Companies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0e0f11;
+  --surface:   #16181c;
+  --surface2:  #1e2128;
+  --surface3:  #252930;
+  --border:    #2e3340;
+  --border2:   #3d4455;
+  --gold:      #c9a96e;
+  --gold2:     #e8c990;
+  --gold-dim:  #8a6f3e;
+  --text:      #eeeae3;
+  --text2:     #9fa3ac;
+  --text3:     #636878;
+  --green:     #4eca8b;
+  --red:       #e05656;
+  --blue:      #5b9cf6;
+  --radius:    12px;
+  --radius-lg: 20px;
+}
+
+html { font-size: 15px; }
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── Header ─────────────────────────────────────────────────── */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0; gap: 12px; z-index: 10;
+}
+.logo { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--gold-dim), var(--gold));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+.logo-text { font-family: 'DM Serif Display', serif; font-size: 1.15rem; color: var(--gold2); }
+.logo-sub  { font-size: 0.65rem; color: var(--text3); letter-spacing: 0.05em; text-transform: uppercase; }
+
+.header-right { display: flex; align-items: center; gap: 10px; }
+
+.user-badge {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 10px 4px 7px;
+  font-size: 0.74rem;
+  color: var(--text2);
+}
+.user-badge.filled { border-color: var(--green); color: var(--green); }
+
+.lang-selector {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px 4px;
+}
+.lang-btn {
+  padding: 5px 9px;
+  border: none; border-radius: 7px;
+  background: transparent;
+  color: var(--text2);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.76rem; font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.lang-btn:hover  { color: var(--text); background: var(--surface3); }
+.lang-btn.active { background: var(--gold-dim); color: var(--gold2); }
+
+/* ── Messages ───────────────────────────────────────────────── */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.msg { display: flex; gap: 9px; max-width: 720px; animation: fadeUp 0.2s ease; }
+.msg.user      { flex-direction: row-reverse; align-self: flex-end; }
+.msg.assistant { align-self: flex-start; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+.msg-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; margin-top: 2px;
+}
+.msg.user      .msg-avatar { background: var(--surface3); border: 1px solid var(--border2); }
+.msg.assistant .msg-avatar { background: rgba(201,169,110,0.15); border: 1px solid var(--gold-dim); }
+
+.msg-body { max-width: calc(100% - 40px); }
+.msg-bubble {
+  padding: 11px 15px;
+  border-radius: var(--radius);
+  font-size: 0.875rem; line-height: 1.7;
+}
+.msg.user      .msg-bubble { background: var(--surface3); border: 1px solid var(--border2); border-radius: var(--radius) var(--radius) 4px var(--radius); }
+.msg.assistant .msg-bubble { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius) var(--radius) var(--radius) 4px; }
+.msg-time { font-size: 0.66rem; color: var(--text3); margin-top: 3px; padding: 0 3px; }
+.msg.user .msg-time { text-align: right; }
+
+.msg-audio { margin-top: 7px; display: flex; align-items: center; gap: 7px; }
+.play-btn {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--gold-dim);
+  background: rgba(201,169,110,0.1);
+  color: var(--gold); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; transition: all 0.14s; flex-shrink: 0;
+}
+.play-btn:hover { background: rgba(201,169,110,0.22); }
+.audio-waveform { flex:1; height:22px; display:flex; align-items:center; gap:2px; }
+.wave-bar { width:3px; border-radius:2px; background:var(--border2); transition: height 0.15s, background 0.15s; }
+.audio-label { font-size:0.67rem; color:var(--text3); white-space:nowrap; }
+
+.typing-indicator {
+  display:flex; align-items:center; gap:9px;
+  padding:9px 13px;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--radius) var(--radius) var(--radius) 4px;
+  width:fit-content;
+}
+.typing-dots { display:flex; gap:4px; }
+.dot { width:5px; height:5px; border-radius:50%; background:var(--gold-dim); animation:bounce 1.2s infinite; }
+.dot:nth-child(2) { animation-delay:0.2s; }
+.dot:nth-child(3) { animation-delay:0.4s; }
+@keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:0.5;} 30%{transform:translateY(-5px);opacity:1;} }
+
+/* ── Bottom panel ───────────────────────────────────────────── */
+.bottom-panel {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.prop-strip-wrap { padding: 10px 16px 0; }
+.prop-strip-label {
+  font-size: 0.67rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text3); font-weight: 600;
+  margin-bottom: 7px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.prop-strip-label span { color: var(--gold-dim); font-size: 0.65rem; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+.prop-strip { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; scrollbar-width:none; }
+.prop-strip::-webkit-scrollbar { display:none; }
+
+.prop-pill {
+  display:flex; align-items:center; gap:6px;
+  padding:5px 11px 5px 8px;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:20px; cursor:pointer;
+  transition:all 0.15s; white-space:nowrap; flex-shrink:0;
+  user-select:none;
+}
+.prop-pill:hover            { border-color:var(--gold-dim); background:var(--surface3); }
+.prop-pill.active           { border-color:var(--gold); background:rgba(201,169,110,0.12); }
+.prop-pill.compare-active   { border-color:var(--blue); background:rgba(91,156,246,0.12); }
+.prop-pill-icon  { font-size:13px; }
+.prop-pill-name  { font-size:0.77rem; color:var(--text2); font-weight:500; }
+.prop-pill.active         .prop-pill-name { color:var(--gold2); }
+.prop-pill.compare-active .prop-pill-name { color:var(--blue); }
+.prop-pill-check {
+  width:13px; height:13px; border-radius:50%;
+  border:1.5px solid var(--border2);
+  display:flex; align-items:center; justify-content:center;
+  font-size:7px; transition:all 0.14s;
+}
+.prop-pill.active         .prop-pill-check { border-color:var(--gold); background:var(--gold); color:#1a1400; }
+.prop-pill.compare-active .prop-pill-check { border-color:var(--blue); background:var(--blue); color:#fff; }
+
+.compare-hint {
+  font-size:0.71rem; color:var(--blue);
+  background:rgba(91,156,246,0.08); border:1px solid rgba(91,156,246,0.2);
+  border-radius:8px; padding:4px 12px;
+  margin:4px 16px; display:none;
+}
+.compare-hint.visible { display:block; }
+
+.input-bar { padding:8px 16px 12px; }
+.input-row {
+  display:flex; align-items:flex-end; gap:8px;
+  background:var(--surface2); border:1px solid var(--border2);
+  border-radius:var(--radius-lg); padding:8px 10px;
+  transition:border-color 0.2s;
+}
+.input-row:focus-within { border-color:var(--gold-dim); }
+
+.input-row.recording-active {
+  border-color: var(--red);
+  background: rgba(224,86,86,0.05);
+}
+
+#chat-input {
+  flex:1; background:none; border:none; outline:none;
+  color:var(--text); font-family:'DM Sans',sans-serif;
+  font-size:0.88rem; resize:none;
+  min-height:22px; max-height:100px; line-height:1.5;
+}
+#chat-input::placeholder { color:var(--text3); }
+#chat-input:disabled { opacity:0.5; }
+
+.send-btn {
+  width:34px; height:34px; border-radius:10px; border:none;
+  background:var(--gold-dim); color:#fff; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px; transition:all 0.15s; flex-shrink:0;
+}
+.send-btn:hover:not(:disabled) { background:var(--gold); }
+.send-btn:disabled { opacity:0.4; cursor:not-allowed; }
+
+/* ── Voice button ───────────────────────────────────────────── */
+.voice-btn {
+  width:34px; height:34px; border-radius:10px;
+  border:1px solid var(--border2);
+  background:var(--surface3); color:var(--text2); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  font-size:15px; transition:all 0.15s; flex-shrink:0;
+  position:relative;
+}
+.voice-btn:hover:not(:disabled) { border-color:var(--gold-dim); color:var(--gold); }
+.voice-btn.recording {
+  border-color: var(--red);
+  background: rgba(224,86,86,0.15);
+  color: var(--red);
+  animation: pulse-ring 1.2s ease infinite;
+}
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(224,86,86,0.5); }
+  60%  { box-shadow: 0 0 0 6px rgba(224,86,86,0); }
+  100% { box-shadow: 0 0 0 0 rgba(224,86,86,0); }
+}
+.voice-btn:disabled { opacity:0.4; cursor:not-allowed; }
+
+.rec-timer {
+  position: absolute;
+  top: -24px; left: 50%; transform: translateX(-50%);
+  background: var(--red); color: #fff;
+  font-size: 0.62rem; font-weight: 700;
+  padding: 2px 7px; border-radius: 8px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rec-status-bar {
+  display: none;
+  align-items: center; gap: 8px;
+  margin-top: 6px;
+  padding: 5px 12px;
+  background: rgba(224,86,86,0.08);
+  border: 1px solid rgba(224,86,86,0.25);
+  border-radius: 8px;
+  font-size: 0.72rem; color: var(--red);
+}
+.rec-status-bar.visible { display: flex; }
+.rec-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--red);
+  animation: blink 1s ease infinite;
+}
+@keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.2;} }
+
+.input-hint { font-size:0.67rem; color:var(--text3); text-align:center; margin-top:5px; }
+
+.context-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:3px 9px; border-radius:12px;
+  font-size:0.71rem; font-weight:500; margin-bottom:5px;
+}
+.context-badge.single { background:rgba(201,169,110,0.1); border:1px solid var(--gold-dim); color:var(--gold); }
+.context-badge.multi  { background:rgba(91,156,246,0.1);  border:1px solid rgba(91,156,246,0.4); color:var(--blue); }
+.context-badge.none   { background:var(--surface3); border:1px solid var(--border); color:var(--text3); }
+
+@keyframes spin { to { transform:rotate(360deg); } }
+.spinner-sm { display:inline-block; width:13px; height:13px; border:2px solid var(--border2); border-top-color:var(--gold); border-radius:50%; animation:spin 0.7s linear infinite; margin-right:6px; vertical-align:middle; }
+
+.toast { position:fixed; bottom:20px; right:20px; background:var(--surface3); border:1px solid var(--border2); border-radius:var(--radius); padding:10px 16px; font-size:0.79rem; color:var(--text); z-index:2000; animation:fadeIn 0.2s ease; max-width:280px; }
+.toast.error   { border-color:var(--red);   color:var(--red); }
+.toast.success { border-color:var(--green); color:var(--green); }
+
+.quick-replies { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.qr-chip {
+  padding:6px 12px;
+  background:var(--surface3); border:1px solid var(--border2);
+  border-radius:16px; font-size:0.78rem; color:var(--text2);
+  cursor:pointer; transition:all 0.14s;
+}
+.qr-chip:hover { border-color:var(--gold-dim); color:var(--gold2); background:var(--surface2); }
+
+@media (max-width:600px) {
+  .messages { padding:12px 10px; }
+  header { padding:10px 12px; }
+  .logo-sub { display:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏡</div>
+    <div>
+      <div class="logo-text">PropVoice</div>
+      <div class="logo-sub">Pacifica Companies</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="user-badge" id="user-badge">
+      👤 <span id="user-name-display">Guest</span>
+    </div>
+    <div class="lang-selector">
+      <button class="lang-btn active" data-lang="english">EN</button>
+      <button class="lang-btn" data-lang="hindi">हिं</button>
+      <button class="lang-btn" data-lang="gujarati">ગુ</button>
+      <button class="lang-btn" data-lang="telugu">తె</button>
+      <button class="lang-btn" data-lang="tamil">த</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Chat area ─────────────────────────────────────────────── -->
+<div class="messages" id="messages"></div>
+
+<!-- ── Bottom Panel ──────────────────────────────────────────── -->
+<div class="bottom-panel">
+  <div class="prop-strip-wrap">
+    <div class="prop-strip-label">
+      🏠 Properties
+      <span id="selection-hint">Click to focus · Ctrl+Click to compare</span>
+    </div>
+    <div class="prop-strip" id="prop-strip">
+      <div style="color:var(--text3);font-size:0.8rem;padding:6px 4px;"><span class="spinner-sm"></span>Loading…</div>
+    </div>
+  </div>
+  <div class="compare-hint" id="compare-hint">🔵 Comparing properties — ask a comparison question!</div>
+  <div class="input-bar">
+    <div class="input-row" id="input-row">
+      <textarea id="chat-input" placeholder="Type your reply…" rows="1"></textarea>
+      <button class="voice-btn" id="voice-btn" title="Click to start recording · Click again to send">🎙️</button>
+      <button class="send-btn" id="send-btn" title="Send">➤</button>
+    </div>
+    <div class="rec-status-bar" id="rec-status-bar">
+      <div class="rec-dot"></div>
+      <span id="rec-status-text">Recording… click 🎙️ again to send</span>
+    </div>
+    <div class="input-hint" id="input-hint">💬 No property selected — searching across all projects</div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+
+// ── State ──────────────────────────────────────────────────────
+let allDocs          = [];
+let selectedIds      = new Set();
+let compareIds       = new Set();
+let selectedLanguage = 'english';
+let isLoading        = false;
+let currentAudio     = null;
+let sessionId        = null;
+let userName         = '';
+let userPhone        = '';
+let onboardState     = 'done'; // 'greeting' | 'asked_name' | 'asked_phone' | 'done'
+
+// ── Voice recording state ──────────────────────────────────────
+let isRecording      = false;
+let mediaRecorder    = null;
+let audioChunks      = [];
+let recordTimer      = null;
+let recordSeconds    = 0;
+let recordedMimeType = 'audio/webm';
+
+const LANG_LABELS = { english:'English', hindi:'हिंदी', gujarati:'ગુજરાતી', telugu:'తెలుగు', tamil:'தமிழ்' };
+const ICONS = ['🏠','🏢','🏗️','🏡','🏘️','🏬','🏭','🏛️','🏪','🌳'];
+
+const messagesEl    = document.getElementById('messages');
+const chatInput     = document.getElementById('chat-input');
+const sendBtn       = document.getElementById('send-btn');
+const voiceBtn      = document.getElementById('voice-btn');
+const inputRow      = document.getElementById('input-row');
+const propStrip     = document.getElementById('prop-strip');
+const compareHint   = document.getElementById('compare-hint');
+const inputHint     = document.getElementById('input-hint');
+const recStatusBar  = document.getElementById('rec-status-bar');
+const recStatusText = document.getElementById('rec-status-text');
+
+// ── Session ────────────────────────────────────────────────────
+function getSessionId() {
+  // New session ID on every page load so conversations are always fresh
+  // but we keep name/phone in localStorage for pre-fill
+  let sid = sessionStorage.getItem('propvoice_session');
+  if (!sid) {
+    sid = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    sessionStorage.setItem('propvoice_session', sid);
+  }
+  return sid;
+}
+
+function loadLocalUser() {
+  userName  = localStorage.getItem('propvoice_name')  || '';
+  userPhone = localStorage.getItem('propvoice_phone') || '';
+}
+
+function saveLocalUser(name, phone) {
+  if (name)  { userName  = name;  localStorage.setItem('propvoice_name',  name); }
+  if (phone) { userPhone = phone; localStorage.setItem('propvoice_phone', phone); }
+  updateUserBadge();
+}
+
+function updateUserBadge() {
+  const disp  = document.getElementById('user-name-display');
+  const badge = document.getElementById('user-badge');
+  if (userName) { disp.textContent = userName; badge.classList.add('filled'); }
+  else          { disp.textContent = 'Guest';  badge.classList.remove('filled'); }
+}
+
+// ── Init ───────────────────────────────────────────────────────
+async function init() {
+  sessionId = getSessionId();
+  loadLocalUser();       // load stored name/phone for pre-fill — does NOT skip greeting
+  updateUserBadge();
+  await loadDocs();
+  setupInputAutoResize();
+  setupInputEvents();
+  setupLangButtons();
+  setupVoiceButton();
+
+  // ALWAYS show greeting on every page load — no exceptions
+  onboardState = 'greeting';
+  await triggerAIGreeting();
+}
+
+// ── AI-driven onboarding ───────────────────────────────────────
+async function triggerAIGreeting() {
+  // KEY FIX: If we already know the user from localStorage, register them
+  // in the DB under this new session_id BEFORE calling __GREETING__.
+  // Otherwise the backend does db_get_user(new_session_id) → empty → asks for name.
+  if (userName) {
+    try {
+      await fetch(`${API_BASE}/api/user`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, name: userName, phone: userPhone }),
+      });
+    } catch(e) { /* non-fatal */ }
+  }
+
+  const typingId = appendTyping();
+  setLoading(true);
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: '__GREETING__',
+        session_id: sessionId,
+        output_language: selectedLanguage,
+      }),
+    });
+    const data = await res.json();
+    removeTyping(typingId);
+    const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+    if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+
+    // If user is already known, backend greeted by name — go straight to done
+    if (userName) {
+      onboardState = 'done';
+      showQuickReplies(msgEl);
+    } else {
+      onboardState = 'asked_name';
+    }
+  } catch(e) {
+    removeTyping(typingId);
+    if (userName) {
+      appendAssistantMsg(`Welcome back, ${userName}! 😊 I'm Priya. What would you like to know about our properties today?`, null);
+      onboardState = 'done';
+    } else {
+      appendAssistantMsg("Welcome to Pacifica Companies! 😊 I'm Priya, your property advisor. May I know your name?", null);
+      onboardState = 'asked_name';
+    }
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function handleOnboardMessage(text) {
+  appendUserMsg(text, []);
+
+  if (onboardState === 'asked_name') {
+    const name = text.trim();
+    saveLocalUser(name, '');
+
+    // Persist name to backend
+    try {
+      await fetch(`${API_BASE}/api/user`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, name, phone: '' }),
+      });
+    } catch(e) {}
+
+    const typingId = appendTyping();
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: `My name is ${name}`,
+          session_id: sessionId,
+          output_language: selectedLanguage,
+        }),
+      });
+      const data = await res.json();
+      removeTyping(typingId);
+      const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+      if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+
+      // If phone already stored from a previous visit, skip asking again
+      if (userPhone) {
+        onboardState = 'done';
+        showQuickReplies(msgEl);
+      } else {
+        onboardState = 'asked_phone';
+      }
+    } catch(e) {
+      removeTyping(typingId);
+      if (userPhone) {
+        appendAssistantMsg(`Nice to meet you again, ${name}! 😊 Feel free to ask anything about our properties.`, null);
+        onboardState = 'done';
+      } else {
+        appendAssistantMsg(`Nice to meet you, ${name}! 😊 Could I get your mobile number so our team can assist you better?`, null);
+        onboardState = 'asked_phone';
+      }
+    } finally {
+      setLoading(false);
+    }
+    return;
+  }
+
+  if (onboardState === 'asked_phone') {
+    const phone   = text.trim();
+    const isSkip  = /^(skip|no|nope|later|nahi|nai)$/i.test(phone);
+    const isValid = /^[0-9+\s\-]{8,15}$/.test(phone);
+
+    if (!isSkip && !isValid) {
+      appendAssistantMsg("Please enter a valid 10-digit mobile number, or type 'skip' to continue.", null);
+      return;
+    }
+
+    if (!isSkip) {
+      saveLocalUser('', phone);
+      try {
+        await fetch(`${API_BASE}/api/user`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, name: userName, phone }),
+        });
+      } catch(e) {}
+    }
+
+    onboardState = 'done';
+    const typingId = appendTyping();
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: isSkip
+            ? `I'd like to skip sharing my number for now`
+            : `My mobile number is ${phone}`,
+          session_id: sessionId,
+          output_language: selectedLanguage,
+        }),
+      });
+      const data = await res.json();
+      removeTyping(typingId);
+      const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+      if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+      showQuickReplies(msgEl);
+    } catch(e) {
+      removeTyping(typingId);
+      appendAssistantMsg(`Thank you! You can now ask me anything about Pacifica's properties. 🏡`, null);
+    } finally {
+      setLoading(false);
+    }
+    return;
+  }
+}
+
+function showQuickReplies(afterEl) {
+  const chips = [
+    "What projects are ready to move in?",
+    "Show me 3 BHK options",
+    "What is the price range?",
+    "Tell me about Pacifica Companies",
+  ];
+  const wrap = document.createElement('div');
+  wrap.className = 'quick-replies';
+  chips.forEach(c => {
+    const btn = document.createElement('div');
+    btn.className = 'qr-chip';
+    btn.textContent = c;
+    btn.onclick = () => { chatInput.value = c; sendMessage(); wrap.remove(); };
+    wrap.appendChild(btn);
+  });
+  afterEl.querySelector('.msg-body').appendChild(wrap);
+}
+
+// ── Property mention auto-detection ───────────────────────────
+const PROPERTY_MENTION_MAP = {
+  'casa lakeside':  'Casa_Lakeside_col',
+  'casa':           'Casa_Lakeside_col',
+  'lakeside':       'Casa_Lakeside_col',
+  'hillcrest':      'Hillcrest_col',
+  'enchante':       'Enchante_col',
+  'aavaas':         'Aavaas_Hyderabad_col',
+  'amara':          'Amara_and_North_Enclave_col',
+  'north enclave':  'Amara_and_North_Enclave_col',
+  'forrest trails': 'Forrest_Trials_col',
+  'forrest':        'Forrest_Trials_col',
+  'madrid county':  'Madrid_County_col',
+  'madrid':         'Madrid_County_col',
+  'pride towers':   'Pride_Towers_col',
+  'aurum':          'Pride_Towers_col',
+  'pacifica one':   'Pacifica_one_col',
+};
+
+function detectPropertyMention(text, currentTargets) {
+  if (currentTargets.length === 0 || currentTargets.length === allDocs.length) return null;
+  const lower    = text.toLowerCase();
+  const keywords = Object.keys(PROPERTY_MENTION_MAP).sort((a, b) => b.length - a.length);
+  for (const kw of keywords) {
+    if (lower.includes(kw)) {
+      const colId = PROPERTY_MENTION_MAP[kw];
+      if (!currentTargets.includes(colId)) return colId;
+    }
+  }
+  return null;
+}
+
+// ── Text send ─────────────────────────────────────────────────
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text || isLoading) return;
+  chatInput.value = '';
+  chatInput.style.height = 'auto';
+
+  if (onboardState !== 'done') {
+    await handleOnboardMessage(text);
+    return;
+  }
+
+  const targets = getTargetIds();
+
+  const mentionedId = detectPropertyMention(text, targets);
+  if (mentionedId) {
+    targets.push(mentionedId);
+    const doc = allDocs.find(d => d.id === mentionedId);
+    showToast(`Auto-added: ${doc ? doc.display_name : mentionedId}`, '');
+  }
+
+  appendUserMsg(text, targets);
+  const typingId = appendTyping();
+  setLoading(true);
+
+  try {
+    const body = { query: text, session_id: sessionId, output_language: selectedLanguage };
+    if (targets.length === 1)    body.pdf_id  = targets[0];
+    else if (targets.length > 1) body.pdf_ids = targets;
+
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Server error: ${res.status}`);
+    const data = await res.json();
+    removeTyping(typingId);
+    const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+    if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+  } catch (e) {
+    removeTyping(typingId);
+    appendErrorMsg(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  VOICE — click to start, click again to stop & send
+// ══════════════════════════════════════════════════════════════
+
+function setupVoiceButton() {
+  voiceBtn.addEventListener('click', async () => {
+    if (isLoading) return;
+    if (!isRecording) {
+      await startRecording();
+    } else {
+      await stopAndSendRecording();
+    }
+  });
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks  = [];
+    isRecording  = true;
+
+    const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+    recordedMimeType = preferred.find(t => MediaRecorder.isTypeSupported(t)) || '';
+
+    const options    = recordedMimeType ? { mimeType: recordedMimeType } : {};
+    mediaRecorder    = new MediaRecorder(stream, options);
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.start(100);
+
+    voiceBtn.classList.add('recording');
+    voiceBtn.innerHTML = '⏹️';
+    voiceBtn.title = 'Click to stop and send';
+    inputRow.classList.add('recording-active');
+    recStatusBar.classList.add('visible');
+    chatInput.placeholder = 'Recording… click ⏹️ to send';
+    chatInput.disabled = true;
+    sendBtn.disabled = true;
+
+    recordSeconds = 0;
+    updateRecTimer();
+
+    recordTimer = setInterval(() => {
+      recordSeconds++;
+      updateRecTimer();
+      if (recordSeconds >= 120) stopAndSendRecording();
+    }, 1000);
+
+  } catch (err) {
+    isRecording = false;
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      showToast('Microphone access denied — please allow it in browser settings', 'error');
+    } else {
+      showToast('Could not access microphone: ' + err.message, 'error');
+    }
+  }
+}
+
+function updateRecTimer() {
+  let timerEl = voiceBtn.querySelector('.rec-timer');
+  if (!timerEl) {
+    timerEl = document.createElement('div');
+    timerEl.className = 'rec-timer';
+    voiceBtn.appendChild(timerEl);
+  }
+  const m = Math.floor(recordSeconds / 60);
+  const s = recordSeconds % 60;
+  timerEl.textContent = m > 0 ? `${m}:${String(s).padStart(2,'0')}` : `${s}s`;
+  recStatusText.textContent = `Recording ${timerEl.textContent} — click ⏹️ to send`;
+}
+
+function resetVoiceUI() {
+  isRecording = false;
+  voiceBtn.classList.remove('recording');
+  voiceBtn.innerHTML = '🎙️';
+  voiceBtn.title = 'Click to start recording · Click again to send';
+  inputRow.classList.remove('recording-active');
+  recStatusBar.classList.remove('visible');
+  chatInput.placeholder = 'Type your reply…';
+  chatInput.disabled = false;
+  sendBtn.disabled = false;
+  clearInterval(recordTimer);
+  const timerEl = voiceBtn.querySelector('.rec-timer');
+  if (timerEl) timerEl.remove();
+}
+
+async function stopAndSendRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+    resetVoiceUI();
+    return;
+  }
+
+  clearInterval(recordTimer);
+
+  await new Promise(resolve => {
+    mediaRecorder.onstop = resolve;
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  });
+
+  resetVoiceUI();
+
+  if (audioChunks.length === 0) {
+    showToast('No audio captured — try again', 'error');
+    return;
+  }
+  if (recordSeconds < 1) {
+    showToast('Recording too short — speak for at least 1 second', '');
+    return;
+  }
+
+  const actualMime = mediaRecorder.mimeType || recordedMimeType || 'audio/webm';
+  const blob = new Blob(audioChunks, { type: actualMime });
+  await sendVoiceBlob(blob, actualMime);
+}
+
+async function sendVoiceBlob(blob, mimeType) {
+  if (onboardState !== 'done') {
+    showToast('Please complete the introduction first', '');
+    return;
+  }
+
+  let ext = 'webm';
+  if (mimeType.includes('ogg'))  ext = 'ogg';
+  else if (mimeType.includes('mp4')) ext = 'mp4';
+
+  const targets = getTargetIds();
+  appendUserMsg('🎙️ Voice message', targets);
+  const typingId = appendTyping();
+  setLoading(true);
+
+  try {
+    const form = new FormData();
+    form.append('audio',           blob, `voice.${ext}`);
+    form.append('session_id',      sessionId);
+    form.append('output_language', selectedLanguage);
+    if (targets.length === 1)    form.append('pdf_id',  targets[0]);
+    else if (targets.length > 1) form.append('pdf_ids', targets.join(','));
+
+    const res = await fetch(`${API_BASE}/api/voice`, { method: 'POST', body: form });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `Server error: ${res.status}`);
+    }
+    const data = await res.json();
+    removeTyping(typingId);
+    const msgEl = appendAssistantMsg(data.answer_text, data.audio_base64);
+    if (data.audio_base64) autoPlayAudio(msgEl, data.audio_base64);
+  } catch (e) {
+    removeTyping(typingId);
+    appendErrorMsg(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ── Property strip ─────────────────────────────────────────────
+async function loadDocs() {
+  try {
+    const res  = await fetch(`${API_BASE}/api/pdfs`);
+    const data = await res.json();
+    allDocs = data.pdfs || [];
+    renderPropStrip();
+  } catch (e) {
+    propStrip.innerHTML = `<div style="color:var(--red);font-size:0.8rem;">⚠️ Could not connect to API</div>`;
+  }
+}
+
+function renderPropStrip() {
+  if (!allDocs.length) {
+    propStrip.innerHTML = `<div style="color:var(--text3);font-size:0.8rem;padding:6px 4px;">No documents found in RAG/ folder</div>`;
+    return;
+  }
+  const pills = allDocs.map((doc, i) => `
+    <div class="prop-pill" id="pill-${doc.id}" data-id="${doc.id}"
+         onclick="togglePill(event,'${doc.id}')"
+         title="Click to focus · Ctrl+Click to compare">
+      <span class="prop-pill-icon">${ICONS[i % ICONS.length]}</span>
+      <span class="prop-pill-name">${doc.display_name}</span>
+      <span class="prop-pill-check">✓</span>
+    </div>`).join('');
+  propStrip.innerHTML = pills;
+  updateUI();
+}
+
+function togglePill(event, id) {
+  const isCtrl = event.ctrlKey || event.metaKey;
+  if (isCtrl) {
+    if (compareIds.has(id)) compareIds.delete(id);
+    else { compareIds.add(id); selectedIds.delete(id); }
+  } else {
+    if (selectedIds.size === 1 && selectedIds.has(id) && compareIds.size === 0) {
+      selectedIds.clear();
+    } else {
+      selectedIds.clear();
+      compareIds.clear();
+      selectedIds.add(id);
+    }
+  }
+  updateUI();
+}
+
+function updateUI() {
+  allDocs.forEach(doc => {
+    const pill = document.getElementById(`pill-${doc.id}`);
+    if (!pill) return;
+    if (selectedIds.has(doc.id))     pill.className = 'prop-pill active';
+    else if (compareIds.has(doc.id)) pill.className = 'prop-pill compare-active';
+    else                             pill.className = 'prop-pill';
+  });
+
+  const total = selectedIds.size + compareIds.size;
+  compareHint.classList.toggle('visible', total > 1);
+
+  if (total === 0) {
+    inputHint.textContent = '💬 No property selected — searching across all projects';
+  } else if (total === 1) {
+    const id  = selectedIds.size ? [...selectedIds][0] : [...compareIds][0];
+    const doc = allDocs.find(d => d.id === id);
+    inputHint.textContent = `🏠 Focused on: ${doc ? doc.display_name : id} · Ctrl+Click another to compare`;
+  } else {
+    const names = [...selectedIds, ...compareIds].map(id => {
+      const d = allDocs.find(x => x.id === id); return d ? d.display_name : id;
+    });
+    inputHint.textContent = `🔵 Comparing: ${names.join(' vs ')}`;
+  }
+}
+
+function getTargetIds() { return [...selectedIds, ...compareIds]; }
+
+// ── Language ───────────────────────────────────────────────────
+function setupLangButtons() {
+  document.querySelectorAll('.lang-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedLanguage = btn.dataset.lang;
+      showToast(`Language: ${LANG_LABELS[selectedLanguage]}`, 'success');
+    });
+  });
+}
+
+// ── Message rendering ──────────────────────────────────────────
+function contextBadge(targets) {
+  if (!targets || targets.length === 0)
+    return `<div class="context-badge none">🌐 All projects</div>`;
+  if (targets.length === 1) {
+    const doc = allDocs.find(d => d.id === targets[0]);
+    return `<div class="context-badge single">🏠 ${doc ? doc.display_name : targets[0]}</div>`;
+  }
+  const names = targets.slice(0,3).map(id => { const d = allDocs.find(x => x.id===id); return d ? d.display_name : id; });
+  return `<div class="context-badge multi">🔵 ${names.join(' vs ')}${targets.length > 3 ? '…' : ''}</div>`;
+}
+
+function appendUserMsg(text, targets) {
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.innerHTML = `
+    <div class="msg-avatar">👤</div>
+    <div class="msg-body">
+      ${targets && targets.length ? contextBadge(targets) : ''}
+      <div class="msg-bubble">${escHtml(text)}</div>
+      <div class="msg-time">${timeNow()}</div>
+    </div>`;
+  messagesEl.appendChild(el);
+  scrollBottom();
+}
+
+function appendAssistantMsg(text, audioB64) {
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  const waveHtml = audioB64 ? `
+    <div class="msg-audio">
+      <button class="play-btn" onclick="toggleAudio(this,'${audioB64}')">▶</button>
+      <div class="audio-waveform">${genWaveBars()}</div>
+      <span class="audio-label">Audio · ${LANG_LABELS[selectedLanguage]}</span>
+    </div>` : '';
+  el.innerHTML = `
+    <div class="msg-avatar">🤖</div>
+    <div class="msg-body">
+      <div class="msg-bubble">${escHtml(text)}</div>
+      ${waveHtml}
+      <div class="msg-time">${timeNow()} · ${LANG_LABELS[selectedLanguage]}</div>
+    </div>`;
+  messagesEl.appendChild(el);
+  scrollBottom();
+  return el;
+}
+
+function appendTyping() {
+  const id = 'typing-' + Date.now();
+  const el = document.createElement('div');
+  el.className = 'msg assistant'; el.id = id;
+  el.innerHTML = `<div class="msg-avatar">🤖</div><div class="msg-body"><div class="typing-indicator"><div class="typing-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div><span style="font-size:0.75rem;color:var(--text3)">Thinking…</span></div></div>`;
+  messagesEl.appendChild(el);
+  scrollBottom();
+  return id;
+}
+
+function removeTyping(id)  { const el = document.getElementById(id); if (el) el.remove(); }
+
+function appendErrorMsg(msg) {
+  const el = document.createElement('div');
+  el.className = 'msg assistant';
+  el.innerHTML = `<div class="msg-avatar">⚠️</div><div class="msg-body"><div class="msg-bubble" style="color:var(--red);border-color:rgba(224,86,86,0.3)">Error: ${escHtml(msg)}</div></div>`;
+  messagesEl.appendChild(el);
+  scrollBottom();
+}
+
+// ── Audio playback ─────────────────────────────────────────────
+function toggleAudio(btn, b64) {
+  if (currentAudio && !currentAudio.paused) {
+    currentAudio.pause(); currentAudio = null;
+    document.querySelectorAll('.play-btn').forEach(b => b.textContent = '▶');
+    return;
+  }
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const blob  = new Blob([bytes], { type: 'audio/wav' });
+  const url   = URL.createObjectURL(blob);
+  currentAudio = new Audio(url);
+  btn.textContent = '⏸';
+  animateWaveBars(btn);
+  currentAudio.play();
+  currentAudio.onended = () => { btn.textContent = '▶'; resetWaveBars(btn); URL.revokeObjectURL(url); };
+}
+
+function autoPlayAudio(msgEl, b64) {
+  const btn = msgEl.querySelector('.play-btn');
+  if (btn) setTimeout(() => toggleAudio(btn, b64), 300);
+}
+
+function genWaveBars() {
+  return Array.from({length:18}, () => `<div class="wave-bar" style="height:${4+Math.random()*14}px"></div>`).join('');
+}
+function animateWaveBars(btn) {
+  btn.closest('.msg-audio')?.querySelectorAll('.wave-bar').forEach(b => {
+    b.style.background = 'var(--gold)'; b.style.height = (4+Math.random()*14)+'px';
+  });
+}
+function resetWaveBars(btn) {
+  btn.closest('.msg-audio')?.querySelectorAll('.wave-bar').forEach(b => {
+    b.style.background = 'var(--border2)';
+  });
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+function setLoading(v) {
+  isLoading = v;
+  sendBtn.disabled = v;
+  if (!isRecording) voiceBtn.disabled = v;
+  if (!isRecording) chatInput.disabled = v;
+}
+
+function scrollBottom() { requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; }); }
+function escHtml(s)     { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>'); }
+function timeNow()      { return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+
+function setupInputAutoResize() {
+  chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
+  });
+}
+
+function setupInputEvents() {
+  chatInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  sendBtn.addEventListener('click', sendMessage);
+}
+
+function showToast(msg, type = '') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`; el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+init();
+</script>
+</body>
+</html>
