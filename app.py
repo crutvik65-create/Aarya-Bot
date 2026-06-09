@@ -1,3 +1,23 @@
+"""
+PropVoice — Pacifica Companies RAG API  v6.0.0
+Enterprise-grade: 5000 users/day, 5 languages, accurate TTS
+
+FIXES vs v5:
+  FIX-1  Intent classifier reordered: PRICE/LOCATION/CONTACT before PERSON.
+         Added LOCATION intent. "price", "location", "Price sqft?" now route correctly.
+  FIX-2  "price range" across all projects now hits COMPARE path (added
+         "price range" / "range" keywords). Multi-collection PRICE queries
+         fall back to COMPARE so the LLM sees all pricing chunks.
+  FIX-3  Token optimisation: small-doc threshold raised to 15 (was 10).
+         Meta-filter results capped per collection. Embedding already uses
+         OpenAI text-embedding-3-small via _get_query_embedding() with LRU
+         cache — no change needed there.
+  FIX-4  Pincode / area / sqft TTS: added PINCODE rule in all 5 language
+         TTS blocks. 6-digit address numbers → digit-by-digit. 3-4 digit
+         area/sqft numbers stay as cardinal words (not treated as currency).
+         Prices stay as lakh/crore words.
+"""
+
 import asyncio
 import base64
 import hashlib
@@ -55,7 +75,7 @@ class Settings(BaseSettings):
     port:               int = Field(8000,             env="PORT")
     workers:            int = Field(1,                env="WORKERS")
     sarvam_tts_model:   str = Field("bulbul:v3",     env="SARVAM_TTS_MODEL")
-    rag_n_results:      int = Field(8,                env="RAG_N_RESULTS")
+    rag_n_results:      int = Field(6,                env="RAG_N_RESULTS")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -181,10 +201,8 @@ def extract_docx_text(file_path: Path) -> str:
 _chroma = chromadb.PersistentClient(path=cfg.chroma_persist_dir)
 _embed  = OpenAIEmbeddingFunction(api_key=cfg.openai_api_key,
                                    model_name="text-embedding-3-small")
-_rag_cache:   dict = {}
 _embed_cache: dict = {}
-_CACHE_MAX       = 512
-_EMBED_CACHE_MAX = 256
+_EMBED_CACHE_MAX = 512          # bumped for 5k users/day
 
 import openai as _openai_sync
 _openai_sync_client = _openai_sync.OpenAI(api_key=cfg.openai_api_key)
@@ -194,15 +212,56 @@ def _col_name(filename: str) -> str:
     name = re.sub(r"_+", "_", name).strip("_")
     return (name + "_col")[:63]
 
-def _chunk_text(text: str, chunk_size: int = 200, overlap: int = 40) -> List[str]:
-    words = text.split()
-    chunks, i = [], 0
-    while i < len(words):
-        chunk = " ".join(words[i: i + chunk_size])
-        if chunk.strip():
-            chunks.append(chunk.strip())
-        i += chunk_size - overlap
+# ── Sentence-aware chunker ────────────────────────────────────────────────────
+_SENT_SPLIT = re.compile(r'(?<=[.!?।])\s+(?=[A-Z"\u0A00-\u0AFF\u0900-\u097F])')
+
+def _chunk_text(text: str, chunk_size: int = 150, overlap_sents: int = 2) -> List[str]:
+    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    sentences: List[str] = []
+    for para in paragraphs:
+        sents = _SENT_SPLIT.split(para)
+        sentences.extend(s.strip() for s in sents if s.strip())
+
+    chunks: List[str] = []
+    current_words: List[str] = []
+    current_sents: List[str] = []
+
+    def _flush():
+        chunk = " ".join(current_words).strip()
+        if chunk:
+            chunks.append(chunk)
+
+    for sent in sentences:
+        words = sent.split()
+        if len(current_words) + len(words) > chunk_size and current_words:
+            _flush()
+            overlap = current_sents[-overlap_sents:] if overlap_sents else []
+            current_words = [w for s in overlap for w in s.split()]
+            current_sents = list(overlap)
+        current_words.extend(words)
+        current_sents.append(sent)
+
+    _flush()
     return chunks
+
+# ── Metadata tagger ───────────────────────────────────────────────────────────
+_PERSON_PAT  = re.compile(r'\b(Mr\.|Ms\.|Mrs\.|Dr\.|Director|Manager|CEO|MD|President|Head|Officer|VP|Founder|Partner|[A-Z][a-z]+ [A-Z][a-z]+)\b')
+_PRICE_PAT   = re.compile(r'(price|cost|rate|lakh|crore|Rs\.|₹|starting|sqft|sq\.?\s*ft|bhk|flat|unit|carpet|area|per\s+sq|onwards|pricing)', re.IGNORECASE)
+_RERA_PAT    = re.compile(r'\bPR/[A-Z]{2}/', re.IGNORECASE)
+_CONTACT_PAT = re.compile(r'(\b\d{10}\b|@|phone|email|contact|call|reach|whatsapp)', re.IGNORECASE)
+_AMENITY_PAT = re.compile(r'(amenity|amenities|club|pool|gym|garden|parking|security|lift|elevator|play|lounge|spa|terrace)', re.IGNORECASE)
+# FIX-1: add location tagger for chunk metadata
+_LOCATION_PAT = re.compile(r'(location|address|situated|located|road|junction|sector|nagar|township|pincode|pin\s*code|\b\d{6}\b)', re.IGNORECASE)
+
+def _tag_chunk(chunk: str) -> dict:
+    return {
+        "has_person":   int(bool(_PERSON_PAT.search(chunk))),
+        "has_price":    int(bool(_PRICE_PAT.search(chunk))),
+        "has_rera":     int(bool(_RERA_PAT.search(chunk))),
+        "has_contact":  int(bool(_CONTACT_PAT.search(chunk))),
+        "has_amenity":  int(bool(_AMENITY_PAT.search(chunk))),
+        "has_location": int(bool(_LOCATION_PAT.search(chunk))),  # FIX-1
+    }
 
 def _file_md5(path: str) -> str:
     h = hashlib.md5()
@@ -244,7 +303,11 @@ def rag_ingest_doc(filename: str) -> dict:
     current_hash = _file_md5(str(doc_path))
     try:
         col = _chroma.get_collection(name=col_name, embedding_function=_embed)
-        if col.metadata.get("file_hash") == current_hash and col.count() > 0:
+        # FIX-1: force re-ingest if schema version changed (added has_location)
+        schema_ver = col.metadata.get("schema_version", "0")
+        if (col.metadata.get("file_hash") == current_hash
+                and col.count() > 0
+                and schema_ver == "2"):
             return {"status": "skipped", "collection": col_name, "chunks": col.count()}
         _chroma.delete_collection(col_name)
     except Exception:
@@ -252,17 +315,26 @@ def rag_ingest_doc(filename: str) -> dict:
     full_text = _extract_text(doc_path)
     if not full_text.strip():
         log.warning("No text extracted from %s", filename)
-        col = _chroma.get_or_create_collection(name=col_name, embedding_function=_embed,
-                  metadata={"file": filename, "file_hash": current_hash})
+        col = _chroma.get_or_create_collection(
+            name=col_name, embedding_function=_embed,
+            metadata={"file": filename, "file_hash": current_hash, "schema_version": "2"})
         return {"status": "empty", "collection": col_name, "chunks": 0}
     chunks = _chunk_text(full_text)
-    col = _chroma.get_or_create_collection(name=col_name, embedding_function=_embed,
-              metadata={"file": filename, "file_hash": current_hash})
+    col = _chroma.get_or_create_collection(
+        name=col_name, embedding_function=_embed,
+        metadata={"file": filename, "file_hash": current_hash, "schema_version": "2"})
     for start in range(0, len(chunks), 100):
         batch = chunks[start: start + 100]
-        col.add(documents=batch,
-                ids=[f"{col_name}_{start+i}" for i in range(len(batch))],
-                metadatas=[{"source": filename, "chunk_index": start+i} for i in range(len(batch))])
+        metadatas = []
+        for i, c in enumerate(batch):
+            m = _tag_chunk(c)
+            m["source"] = filename
+            m["chunk_index"] = start + i
+            metadatas.append(m)
+        col.add(
+            documents=batch,
+            ids=[f"{col_name}_{start+i}" for i in range(len(batch))],
+            metadatas=metadatas)
     return {"status": "ingested", "collection": col_name, "chunks": len(chunks)}
 
 def rag_ingest_all() -> List[dict]:
@@ -277,88 +349,279 @@ def rag_ingest_all() -> List[dict]:
     return results
 
 def _get_query_embedding(query: str) -> list:
+    """LRU-cached embedding — single OpenAI call per unique query."""
     key = hashlib.sha256(query.encode()).hexdigest()
     if key in _embed_cache:
         return _embed_cache[key]
     resp   = _openai_sync_client.embeddings.create(input=[query], model="text-embedding-3-small")
     vector = resp.data[0].embedding
     if len(_embed_cache) >= _EMBED_CACHE_MAX:
+        # evict oldest
         del _embed_cache[next(iter(_embed_cache))]
     _embed_cache[key] = vector
     return vector
 
-def rag_retrieve(collection_id: str, query: str, n: int = None) -> List[str]:
-    """Retrieve ALL chunks from a single-property collection — always give full context."""
-    try:
-        col = _chroma.get_collection(name=collection_id)
-    except Exception:
-        return []
-    count = col.count()
-    if count == 0:
-        return []
-    # For single-property queries, fetch ALL chunks (docs are small, 3-10 chunks).
-    # This guarantees the LLM always has complete information.
-    res    = col.get(include=["documents"])
-    chunks = res.get("documents", [])
-    log.info("RAG single-col %s: fetched ALL %d chunks", collection_id, len(chunks))
-    return chunks
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 4B — QUERY INTENT CLASSIFIER  (FIX-1, FIX-2)
+#
+#  BUG ROOT CAUSE: In v5, PERSON check ran BEFORE PRICE/LOCATION checks.
+#  "price and carpet area?" matched [A-Z][a-z]+ [A-Z][a-z]+ on ... actually
+#  it was matching because "price" contains no capitals so that's not it.
+#  The real cause: _PRICE_PAT_Q was checked AFTER _PERSON_PAT_Q.
+#  "location details" → PERSON because "details" has no cap letter after space,
+#  but the regex is case-insensitive so [A-Z][a-z]+ matches "location" followed
+#  by a space... Actually on review: Python re.IGNORECASE on [A-Z][a-z]+
+#  still only matches uppercase-first because \b[A-Z] is case-sensitive even
+#  with IGNORECASE for character classes. The real issue for "location" → GENERAL
+#  was that Aavaas_Hyderabad_col was selected and its 3 chunks didn't have location
+#  data tagged (schema_version "1" had no has_location). For "price range" → the
+#  query matches _PERSON_PAT_Q because "price" doesn't, "range" doesn't... wait.
+#  Actually "What is the price range?" → log shows INTENT: PERSON. Checking:
+#  _PERSON_PAT_Q pattern includes [A-Z][a-z]+\s+[A-Z][a-z]+ but "price range"
+#  is all lowercase. So it must be matching something else. "What" + " is" = no.
+#  Looking at the pattern again: it's `re.IGNORECASE` so [A-Z][a-z]+ with
+#  IGNORECASE matches ANY letter followed by lowercase — so "pr ice" → no,
+#  but "price" = p-r-i-c-e, that's 5 chars all matching [a-z] with ignorecase,
+#  plus the \b word boundary... \b(who\s+is | ... | [A-Z][a-z]+\s+[A-Z][a-z]+)
+#  WITH re.IGNORECASE means [A-Z] matches any letter. So "price range" matches
+#  [A-Z][a-z]+\s+[A-Z][a-z]+ !! That's the exact bug. The PERSON pattern's
+#  last clause is a catch-all for "two capitalized words" but with IGNORECASE
+#  it matches ANY two words. FIX: remove IGNORECASE from _PERSON_PAT_Q OR
+#  make the two-word pattern require actual uppercase first letter.
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _is_comparison_query(query: str) -> bool:
-    lower = query.lower()
-    patterns = [
-        r"compar",
-        r"\b(vs\.?|versus|difference|better|best|worst|cheapest|most\s+expensive|"
-        r"lowest|highest|minimum|maximum|least|rank|which one|all sites?|all projects?|"
-        r"all propert|across all|among all|between)\b",
-        r"\b(price list|price range|cost of all|rates? of all|how much.*all|all.*price|"
-        r"pricing.*all|all.*cost|starting price|starting cost)\b",
-        r"\b(every project|each project|each property|all (the )?propert|full list|overview of all)\b",
-        r"(સૌથી\s+(ઓછ|વધાર|મોંઘ|સસ્ત)|બધી\s+(સાઈટ|પ્રોજેક્ટ)|"
-        r"કઈ\s+સાઈટ|સૌથી\s+ઓછો\s+ભાવ|સૌથી\s+વધ)",
-        r"(सबसे\s+(कम|ज़्यादा|ज्यादा|महंगा|सस्ता)|"
-        r"सभी\s+(साइट|प्रोजेक्ट|प्रॉपर्टी)|कौन\s+सी\s+साइट|तुलना)",
-    ]
-    return any(re.search(p, lower) for p in patterns)
+_SKIP_PAT = re.compile(
+    r'^\s*(hi|hello|hey|thanks|thank you|okay|ok|sure|bye|goodbye|good\s*(morning|evening|afternoon|night)'
+    r'|namaste|kem\s*cho|kem\s*chho|kaise\s*ho|हाय|हेलो|नमस्ते|ઠીક|ઓ\s*કે|ઓ\s*કેy|'
+    r'__GREETING__|__ASK_PHONE__|__PHONE_SKIP__|__PHONE_DONE__)\s*[!?.]*\s*$',
+    re.IGNORECASE)
 
-def _extract_pricing_chunks(col_name: str) -> List[str]:
-    PRICE_KW = re.compile(
-        r"(price|cost|rate|lakh|crore|Rs\.|₹|starting|sqft|sq\.?\s*ft|"
-        r"bhk|flat|unit|carpet|area|per\s+sq|onwards|pricing)", re.IGNORECASE)
+# FIX-1: PERSON pattern — removed re.IGNORECASE so [A-Z][a-z]+ requires actual caps
+# This prevents "price range", "carpet area", "location details" from matching
+_PERSON_PAT_Q = re.compile(
+    r'\b(who\s+is|who\'?s|contact\s+of|meet|director|manager|ceo|founder|head\s+of'
+    r'|Mr\.|Ms\.|Dr\.|[A-Z][a-z]+\s+[A-Z][a-z]+)\b'
+    # NOTE: NO re.IGNORECASE here — intentional, two-word pattern needs real Title Case
+)
+
+_CONTACT_PAT_Q = re.compile(
+    r'\b(phone|number|contact|call|email|reach|whatsapp|helpline|mobile)\b', re.IGNORECASE)
+
+_RERA_PAT_Q = re.compile(
+    r'\b(rera|registration|registered|pr/)\b', re.IGNORECASE)
+
+_AMENITY_PAT_Q = re.compile(
+    r'\b(amenity|amenities|facilities|club|pool|gym|garden|playground|security|lift|parking|spa)\b',
+    re.IGNORECASE)
+
+# FIX-1: new LOCATION intent
+_LOCATION_PAT_Q = re.compile(
+    r'\b(location|address|where|situated|located|road|junction|sector|nagar|landmark|'
+    r'near|distance|km\b|miles?|pincode|pin\s*code|directions?|map|area|locality|'
+    r'city|town|village|hyderabad|ahmedabad|bangalore|mumbai|pune|delhi)\b',
+    re.IGNORECASE)
+
+# FIX-2: added "price range", "range", "all price", "price list" to COMPARE
+_COMPARE_PAT = re.compile(
+    r'\b(compar|vs\.?|versus|difference|better|best|worst|cheapest|most\s+expensive|'
+    r'lowest|highest|minimum|maximum|least|rank|which one|all sites?|all projects?|'
+    r'all propert|across all|among all|between|price list|price range|full list|'
+    r'starting price|all prices?|list\s+all|show\s+all|overview)\b'
+    r'|(સૌથી|બધી|सबसे|सभी|तुलना|সব|সবচেয়ে)',
+    re.IGNORECASE)
+
+_PRICE_PAT_Q = re.compile(
+    r'\b(price|cost|rate|budget|afford|lakh|crore|cheap|expensive|how much|what.*cost|'
+    r'bhk.*price|price.*bhk|starting|onwards|sqft|sq\s*ft|carpet|per\s+sq|per\s+foot|'
+    r'psf|pricing|range)\b', re.IGNORECASE)
+
+QueryIntent = str
+
+def classify_query(query: str) -> QueryIntent:
+    """
+    Lightweight rule-based classifier — zero LLM cost.
+
+    PRIORITY ORDER (most specific → most general):
+      SKIP → COMPARE → PRICE → LOCATION → CONTACT → RERA → AMENITY → PERSON → GENERAL
+
+    PERSON is intentionally checked LAST because its two-word Title Case pattern
+    can false-positive on property names embedded in other query types.
+    """
+    q = query.strip()
+    if _SKIP_PAT.match(q):
+        return "SKIP"
+    if _COMPARE_PAT.search(q):
+        return "COMPARE"
+    if _PRICE_PAT_Q.search(q):          # FIX-1: PRICE before PERSON
+        return "PRICE"
+    if _LOCATION_PAT_Q.search(q):       # FIX-1: new LOCATION intent
+        return "LOCATION"
+    if _CONTACT_PAT_Q.search(q):
+        return "CONTACT"
+    if _RERA_PAT_Q.search(q):
+        return "RERA"
+    if _AMENITY_PAT_Q.search(q):
+        return "AMENITY"
+    if _PERSON_PAT_Q.search(q):         # FIX-1: PERSON last
+        return "PERSON"
+    return "GENERAL"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 4C — SMART RETRIEVAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+# FIX-3: raised small-doc threshold from 10 → 15
+_SMALL_DOC_THRESHOLD = 15
+
+def _meta_filter_fetch(col_name: str, flag: str, semantic_fallback_query: str = "",
+                       n: int = None, cap: int = 8) -> List[str]:
+    """
+    Fetch chunks by metadata flag. Hard-cap results to avoid token explosion.
+    Falls back to semantic search if no metadata hits.
+    cap: maximum chunks returned (FIX-3: enterprise token control)
+    """
+    if n is None:
+        n = cfg.rag_n_results
     try:
         col   = _chroma.get_collection(name=col_name)
         count = col.count()
         if count == 0:
             return []
-        res   = col.get(include=["documents"])
+        res  = col.get(where={flag: {"$eq": 1}}, include=["documents"])
+        docs = res.get("documents", [])
+        if docs:
+            log.info("META-FILTER %s [%s]: found %d chunks (cap=%d)", col_name, flag, len(docs), cap)
+            return docs[:cap]
+        if semantic_fallback_query:
+            vector = _get_query_embedding(semantic_fallback_query)
+            n_use  = min(n, count)
+            res2   = col.query(query_embeddings=[vector], n_results=n_use)
+            fallback = res2.get("documents", [[]])[0]
+            log.info("META-FILTER fallback semantic %s: %d chunks", col_name, len(fallback))
+            return fallback
+    except Exception as e:
+        log.warning("Meta-filter failed %s [%s]: %s", col_name, flag, e)
+    return []
+
+def rag_retrieve(collection_id: str, query: str, intent: QueryIntent = "GENERAL") -> List[str]:
+    """
+    Single-collection retrieval. Intent-aware.
+    FIX-3: small-doc threshold raised to 15.
+    FIX-1: LOCATION intent maps to has_location flag.
+    FIX-2: PRICE on single collection also uses has_price filter with semantic fallback.
+    """
+    try:
+        col   = _chroma.get_collection(name=collection_id)
+        count = col.count()
+    except Exception:
+        return []
+    if count == 0:
+        return []
+
+    # Small doc: return all (cheap, avoids any retrieval miss)
+    if count <= _SMALL_DOC_THRESHOLD:
+        res    = col.get(include=["documents"])
+        chunks = res.get("documents", [])
+        log.info("RAG full-fetch %s (%d chunks, small doc)", collection_id, len(chunks))
+        return chunks
+
+    intent_to_flag = {
+        "PERSON":   "has_person",
+        "CONTACT":  "has_contact",
+        "RERA":     "has_rera",
+        "AMENITY":  "has_amenity",
+        "PRICE":    "has_price",
+        "LOCATION": "has_location",   # FIX-1
+    }
+    if intent in intent_to_flag:
+        return _meta_filter_fetch(
+            collection_id, intent_to_flag[intent],
+            semantic_fallback_query=query,
+            n=cfg.rag_n_results,
+            cap=10)
+
+    # GENERAL / COMPARE: semantic search
+    vector = _get_query_embedding(query)
+    n_use  = min(cfg.rag_n_results, count)
+    res    = col.query(query_embeddings=[vector], n_results=n_use)
+    chunks = res.get("documents", [[]])[0]
+    log.info("RAG semantic %s: %d chunks (intent=%s)", collection_id, len(chunks), intent)
+    return chunks
+
+def _extract_pricing_chunks(col_name: str, cap: int = 4) -> List[str]:
+    """For COMPARE queries: fetch price-tagged chunks, capped tightly."""
+    try:
+        col   = _chroma.get_collection(name=col_name)
+        count = col.count()
+        if count == 0:
+            return []
+        res   = col.get(where={"has_price": {"$eq": 1}}, include=["documents"])
         docs  = res.get("documents", [])
-        priced = [d for d in docs if PRICE_KW.search(d)]
-        return priced if priced else docs
+        if docs:
+            return docs[:cap]
+        res2  = col.get(include=["documents"])
+        return res2.get("documents", [])[:3]
     except Exception as e:
         log.warning("Price chunk extract failed for %s: %s", col_name, e)
         return []
 
-def rag_retrieve_multi(collection_ids: List[str], query: str) -> dict:
-    is_comparison = _is_comparison_query(query)
-    vector        = _get_query_embedding(query)
+def rag_retrieve_multi(collection_ids: List[str], query: str,
+                       intent: QueryIntent = "GENERAL") -> dict:
+    """
+    Multi-collection retrieval. Intent-aware, token-controlled.
 
-    if is_comparison:
-        log.info("Comparison query — fetching PRICING chunks from every collection")
+    FIX-2: When intent=PRICE and >1 collection, treat as COMPARE to ensure
+    all properties return price chunks. "price range for all" needs this.
+    """
+    # FIX-2: PRICE on multi-collection → treat like COMPARE
+    effective_intent = intent
+    if intent == "PRICE" and len(collection_ids) > 1:
+        effective_intent = "COMPARE"
+        log.info("RAG multi: PRICE on %d collections → promoting to COMPARE", len(collection_ids))
+
+    is_comparison = (effective_intent == "COMPARE")
+
+    intent_to_flag = {
+        "PERSON":   "has_person",
+        "CONTACT":  "has_contact",
+        "RERA":     "has_rera",
+        "AMENITY":  "has_amenity",
+        "LOCATION": "has_location",   # FIX-1
+    }
+
+    vector = None
+    if not is_comparison and effective_intent not in intent_to_flag:
+        vector = _get_query_embedding(query)
 
     def _query_one(cid: str) -> tuple:
         if is_comparison:
-            return cid, _extract_pricing_chunks(cid)
-        # Non-comparison multi-property: semantic search
+            return cid, _extract_pricing_chunks(cid, cap=4)
+        if effective_intent in intent_to_flag:
+            # FIX-3: cap at 5 per collection for multi-collection metadata queries
+            chunks = _meta_filter_fetch(
+                cid, intent_to_flag[effective_intent],
+                semantic_fallback_query=query, n=4, cap=5)
+            return cid, chunks
+        # GENERAL: semantic, capped
         try:
             col   = _chroma.get_collection(name=cid)
             count = col.count()
             if count == 0:
                 return cid, []
-            n      = min(cfg.rag_n_results, count)
-            res    = col.query(query_embeddings=[vector], n_results=n)
+            # Small doc: return all
+            if count <= _SMALL_DOC_THRESHOLD:
+                res    = col.get(include=["documents"])
+                return cid, res.get("documents", [])
+            n_use = min(cfg.rag_n_results, count)
+            if vector is None:
+                v = _get_query_embedding(query)
+            else:
+                v = vector
+            res   = col.query(query_embeddings=[v], n_results=n_use)
             chunks = res.get("documents", [[]])[0]
             return cid, chunks
         except Exception as e:
-            log.warning("RAG retrieve failed for %s: %s", cid, e)
+            log.warning("RAG multi-retrieve failed for %s: %s", cid, e)
             return cid, []
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -372,7 +635,7 @@ def rag_retrieve_multi(collection_ids: List[str], query: str) -> dict:
     return results
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SECTION 5 — RERA NORMALISER  (LLM output cleanup)
+#  SECTION 5 — RERA NORMALISER
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BROKEN_RERA_PAT = re.compile(
@@ -390,177 +653,253 @@ def normalise_rera(text: str) -> str:
     return _BROKEN_RERA_PAT.sub(_fix_broken_rera, text)
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SECTION 6 — SINGLE LLM CALL  (dual-output: ui_text + tts_text)
-#
-#  KEY ARCHITECTURE:
-#  One call produces a JSON with two fields:
-#    "ui"  — display text: raw numbers, RERA codes as-is, native script
-#    "tts" — spoken text : all numbers as words in target language,
-#            RERA digit-by-digit, currency as words
-#
-#  This eliminates ALL post-processing regex for numbers.
-#  The LLM knows the language and writes both versions correctly in one pass.
+#  SECTION 6 — LLM
 # ─────────────────────────────────────────────────────────────────────────────
 
 _openai = AsyncOpenAI(api_key=cfg.openai_api_key)
 
-# ── TTS number/RERA instructions per language ────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 6A — TTS NUMBER RULES  (FIX-4)
+#
+#  KEY ADDITIONS vs v5:
+#  1. PINCODE rule: 6-digit standalone number in an address context → digit-by-digit
+#  2. AREA/SQFT rule: 3-4 digit number followed by sq ft / sqft / ચો.ફૂ. → cardinal words
+#     (e.g. 802 sq ft → eight hundred two square feet — NOT "eight zero two")
+#     This was already correct in v5 but now EXPLICITLY stated to avoid confusion
+#  3. MOBILE rule: 10-digit number → digit-by-digit (was already there, now explicit)
+#  4. PRICE rule: number followed by lakh/crore → spoken as cardinal + unit word
+#  5. NEVER treat 6-digit pincode as a monetary amount (the 500049 → "five lakh" bug)
+#
+#  DECISION TREE for any number in TTS field:
+#    Is it after "Rs." / "₹" / followed by "lakh"/"crore"?  → currency words
+#    Is it 10 digits?                                         → digit-by-digit (mobile)
+#    Is it 6 digits standalone in an address?                 → digit-by-digit (pincode)
+#    Is it a RERA segment?                                    → per RERA rules
+#    Is it 3-4 digits followed by sq ft / sqft?              → cardinal words (area)
+#    Otherwise                                                → cardinal words
+# ─────────────────────────────────────────────────────────────────────────────
+
 _TTS_NUMBER_RULES = {
-    "english": """TTS NUMBER RULES (for the "tts" field — English):
-- All integers and decimals → full English words. Up to 99 lakh: word form. Above: digit-by-digit.
-  Examples: 44 → "forty four", 861 → "eight hundred sixty one", 61.33 → "sixty one point three three"
-- Prices: Rs./₹ → "rupees", then number words + unit.
-  Examples: "Rs. 44 lakhs" → "rupees forty four lakhs", "Rs. 1.20 Crores" → "rupees one point two zero crores"
-- RERA codes — TWO rules for segments split by "/":
-    • Segment is ONLY letters AND longer than 5 chars → speak as a natural word (city/district name).
-      Examples: GANDHINAGAR → "Gandhinagar", AHMEDABAD → "Ahmedabad", SANAND → "Sanand"
-    • Segment is 5 chars or shorter, OR contains any digit → spell every character individually.
-      Examples: PR → "P R", GJ → "G J", AUDA → "A U D A", RAA04324 → "R A A zero four three two four",
-                A1R → "A one R", 211021 → "two one one zero two one"
-  Full example: PR/GJ/GANDHINAGAR/GANDHINAGAR/AUDA/RAA04324/A1R/211021
-             → "P R, G J, Gandhinagar, Gandhinagar, A U D A, R A A zero four three two four, A one R, two one one zero two one"
-  Full example: PR/GJ/AHMEDABAD/SANAND/AUDA/RAA07702/241120
-             → "P R, G J, Ahmedabad, Sanand, A U D A, R A A zero seven seven zero two, two four one one two zero"
-- Phone numbers: digit by digit. 9876543210 → "nine eight seven six five four three two one zero"
-- BHK: digit as word. "2 BHK" → "two BHK", "3 BHK" → "three BHK"
-- sq ft: "eight hundred sixty one square feet"
-- Keep all other text natural and fluent.""",
 
-    "hindi": """TTS संख्या नियम ("tts" फ़ील्ड के लिए — हिंदी):
-- सभी संख्याएँ हिंदी शब्दों में लिखें।
-  उदाहरण: 44 → "चौवालीस", 861 → "आठ सौ इकसठ", 2 → "दो", 3 → "तीन"
-- कीमत: ₹/Rs. को "रुपये" लिखें, फिर हिंदी में संख्या + इकाई।
-  उदाहरण: "Rs. 44 lakhs" → "रुपये चौवालीस लाख", "Rs. 61.33 lakhs" → "रुपये इकसठ दशमलव तैंतीस लाख"
-- RERA कोड — "/" से अलग हर segment के लिए दो नियम:
-    • Segment में ONLY letters हों AND 5 से ज़्यादा chars हों → पूरा शब्द बोलें (शहर/जिले का नाम)।
-      उदाहरण: GANDHINAGAR → "Gandhinagar", AHMEDABAD → "Ahmedabad", SANAND → "Sanand"
-    • Segment 5 या उससे कम chars का हो, OR कोई digit हो → हर character अलग-अलग बोलें।
-      उदाहरण: PR → "P R", GJ → "G J", AUDA → "A U D A", RAA07702 → "R A A zero seven seven zero two",
-               241120 → "two four one one two zero"
-  पूरा उदाहरण: PR/GJ/AHMEDABAD/SANAND/AUDA/RAA07702/241120
-            → "P R, G J, Ahmedabad, Sanand, A U D A, R A A zero seven seven zero two, two four one one two zero"
-  (RERA के letters/numbers English में ही रखें)
-- फ़ोन नंबर: अंक दर अंक।
-- BHK: "2 BHK" → "दो BHK", "3 BHK" → "तीन BHK"
-- वर्ग फुट: "आठ सौ इकसठ वर्ग फुट"
-- बाकी सब text प्राकृतिक और धाराप्रवाह रखें।""",
+"english": """\
+TTS FIELD RULES — English
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GOLDEN RULE: "tts" is the spoken version of "ui". Every number must match exactly.
 
-    "gujarati": """TTS સંખ્યા નિયમો ("tts" ક્ષેત્ર માટે — ગુજરાતી):
-- બધી સંખ્યાઓ ગુજરાતી શબ્દોમાં લખો।
-  ઉદાહરણ: 44 → "ચુમ્માળીસ", 861 → "આઠ સો એકસઠ", 2 → "બે", 3 → "ત્રણ"
-- કિંમત: ₹/Rs. → "રૂપિયા", પછી ગુજરાતીમાં સંખ્યા + એકમ।
-  ઉદાહરણ: "Rs. 44 lakhs" → "રૂપિયા ચુમ્માળીસ લાખ", "Rs. 1.20 Crores" → "રૂપિયા એક કરોડ વીસ લાખ"
-- RERA કોડ — "/" વડે અલગ થયેલ દરેક segment માટે બે નિયમ:
-    • Segment માં ONLY letters હોય AND 5 થી વધુ chars હોય → આખો શબ્દ બોલો (શહેર/જિલ્લાનું નામ)।
-      ઉદાહરણ: GANDHINAGAR → "Gandhinagar", AHMEDABAD → "Ahmedabad", SANAND → "Sanand"
-    • Segment 5 અથવા તેથી ઓછા chars નો હોય, OR કોઈ digit હોય → દરેક character અલગ-અલગ બોલો।
-      ઉદાહરણ: PR → "P R", GJ → "G J", AUDA → "A U D A", RAA04324 → "R A A zero four three two four",
-               A1R → "A one R", 211021 → "two one one zero two one"
-  પૂર્ણ ઉદાહરણ: PR/GJ/GANDHINAGAR/GANDHINAGAR/AUDA/RAA04324/A1R/211021
-             → "P R, G J, Gandhinagar, Gandhinagar, A U D A, R A A zero four three two four, A one R, two one one zero two one"
-  (RERA ના letters/numbers English char-by-char જ રાખો)
-- ફોન નંબર: અંક-દર-અંક।
-- BHK: "2 BHK" → "બે BHK", "3 BHK" → "ત્રણ BHK"
-- ચોરસ ફૂટ: "આઠ સો એકસઠ ચોરસ ફૂટ"
-- બાકી બધો text સ્વાભાવિક અને પ્રવાહી રાખો।""",
+NUMBER TYPE DECISION TREE (apply top-to-bottom):
+  1. PRICE  — number before/after "lakh" or "crore" or after "Rs."/"₹"
+              → speak as currency words
+              44 lakh → forty four lakh | 64.99 lakh → sixty four point nine nine lakh
+  2. MOBILE — exactly 10 consecutive digits
+              → digit by digit
+              9876543210 → nine eight seven six five four three two one zero
+  3. PINCODE — exactly 6 digits appearing in an address (after city name, or hyphenated like "Hyderabad-500049")
+              → ALWAYS digit by digit — NEVER as a monetary amount
+              500049 → five zero zero zero four nine
+              400001 → four zero zero zero zero one
+              ⚠ COMMON MISTAKE: 500049 is NOT "five lakh forty nine" — it is a PINCODE
+  4. RERA segment — part of a RERA code (split by "/"):
+              Rule A: segment has ONLY letters AND length > 5 → speak as word
+              Rule B: ≤5 chars OR has any digit → spell every character
+              PR/GJ/GANDHINAGAR/AUDA/RAA04324/A1R/211021 →
+                "P R, G J, Gandhinagar, A U D A, R A A zero four three two four, A one R, two one one zero two one"
+  5. AREA   — 3-4 digit number followed by "sq ft", "sqft", "sq.ft", "square feet"
+              → cardinal words + "square feet"
+              802 sq ft → eight hundred two square feet
+              575 sq ft → five hundred seventy five square feet
+  6. DEFAULT — all other numbers → cardinal words
+              44 → forty four | 85 → eighty five | 64 → sixty four
 
-    "telugu": """TTS సంఖ్య నియమాలు ("tts" ఫీల్డ్ కోసం — తెలుగు):
-- అన్ని సంఖ్యలు తెలుగు పదాలలో రాయండి.
-  ఉదాహరణ: 44 → "నలభై నాలుగు", 861 → "ఎనిమిది వందల అరవై ఒకటి"
-- ధర: ₹/Rs. → "రూపాయలు", తర్వాత తెలుగులో సంఖ్య + యూనిట్.
-  ఉదాహరణ: "Rs. 44 lakhs" → "రూపాయలు నలభై నాలుగు లక్షలు"
-- RERA కోడ్ — "/" తో విభజించిన ప్రతి segment కు రెండు నియమాలు:
-    • Segment లో ONLY letters ఉంటే AND 5 కంటే ఎక్కువ chars ఉంటే → మొత్తం పదంగా చదవండి (నగరం/జిల్లా పేరు).
-      ఉదాహరణ: GANDHINAGAR → "Gandhinagar", AHMEDABAD → "Ahmedabad", HYDERABAD → "Hyderabad"
-    • Segment 5 లేదా తక్కువ chars, లేదా digit ఉంటే → ప్రతి character విడివిడిగా చదవండి.
-      ఉదాహరణ: PR → "P R", GJ → "G J", AUDA → "A U D A", RAA07702 → "R A A zero seven seven zero two"
-  (RERA letters/numbers English లో char-by-char మాట్లాడండి)
-- ఫోన్ నంబర్: అంకె వారీగా.
-- BHK: "2 BHK" → "రెండు BHK"
-- మిగతా text సహజంగా ఉంచండి.""",
+PRICES (full examples):
+  Rs. 44 lakhs     → rupees forty four lakhs
+  Rs. 64.99 lakhs  → rupees sixty four point nine nine lakhs
+  Rs. 1.20 Crores  → rupees one point two zero crores
+  ⚠ NEVER say "rupees five lakh forty nine" for pincode 500049 — that is WRONG
 
-    "tamil": """TTS எண் விதிகள் ("tts" புலத்திற்கு — தமிழ்):
-- அனைத்து எண்களையும் தமிழ் வார்த்தைகளில் எழுதவும்.
-  எடுத்துக்காட்டு: 44 → "நாற்பத்து நான்கு", 861 → "எட்டு நூற்று அறுபத்து ஒன்று"
-- விலை: ₹/Rs. → "ரூபாய்", பின்னர் தமிழில் எண் + அலகு.
-  எடுத்துக்காட்டு: "Rs. 44 lakhs" → "ரூபாய் நாற்பத்து நான்கு லட்சம்"
-- RERA குறியீடு — "/" மூலம் பிரிக்கப்பட்ட ஒவ்வொரு segment க்கும் இரண்டு விதிகள்:
-    • Segment ல் ONLY letters இருந்தால் AND 5 எழுத்துகளுக்கு மேல் இருந்தால் → முழு வார்த்தையாக படிக்கவும் (நகர/மாவட்டப் பெயர்).
-      எடுத்துக்காட்டு: GANDHINAGAR → "Gandhinagar", AHMEDABAD → "Ahmedabad", CHENNAI → "Chennai"
-    • Segment 5 அல்லது குறைவான எழுத்துகள், அல்லது digit இருந்தால் → ஒவ்வொரு character தனியாக படிக்கவும்.
-      எடுத்துக்காட்டு: PR → "P R", GJ → "G J", AUDA → "A U D A", RAA04324 → "R A A zero four three two four"
-  (RERA letters/numbers ஆங்கிலத்தில் char-by-char பேசவும்)
-- தொலைபேசி எண்: இலக்கம் இலக்கமாக.
-- BHK: "2 BHK" → "இரண்டு BHK"
-- மற்ற உரையை இயற்கையாக வைத்திருங்கள்.""",
+BHK:  2 BHK → two BHK  |  3 BHK → three BHK  |  4 BHK → four BHK
+""",
+
+"hindi": """\
+TTS FIELD RULES — हिंदी
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+सुनहरा नियम: "tts" field "ui" का बोला जाने वाला रूप है।
+
+संख्या प्रकार निर्णय वृक्ष (ऊपर से नीचे लागू करें):
+  1. मूल्य — "लाख"/"करोड़"/"रुपये" के साथ संख्या → हिंदी में मूल्य शब्द
+              44 लाख → चौवालीस लाख | 64.99 लाख → चौंसठ दशमलव नौ नौ लाख
+  2. मोबाइल — ठीक 10 अंक → एक-एक अंक बोलें
+              9876543210 → नौ आठ सात छह पाँच चार तीन दो एक शून्य
+  3. पिनकोड — 6 अंक जो पते में हों (शहर के नाम के बाद या हाइफन के बाद)
+              → हमेशा एक-एक अंक — कभी मौद्रिक राशि के रूप में नहीं
+              500049 → पाँच शून्य शून्य शून्य चार नौ
+              400001 → चार शून्य शून्य शून्य शून्य एक
+              ⚠ गलती: 500049 को "पाँच लाख उनचास" मत कहें — यह पिनकोड है
+  4. RERA — "/" से विभाजित segment:
+              Rule A: केवल letters और length > 5 → शब्द के रूप में
+              Rule B: ≤5 chars या कोई digit → एक-एक character (English में)
+  5. क्षेत्रफल — 3-4 अंक + "वर्ग फुट" → हिंदी में गणना शब्द
+              802 वर्ग फुट → आठ सौ दो वर्ग फुट
+  6. अन्य — cardinal शब्द
+              44 → चौवालीस | 85 → पचासी | 50 → पचास
+
+मूल्य (पूर्ण उदाहरण):
+  Rs. 44 लाख → रुपये चौवालीस लाख
+  Rs. 85 लाख → रुपये पचासी लाख ← "पचास लाख" नहीं
+  Rs. 64.99 लाख → रुपये चौंसठ दशमलव नौ नौ लाख
+
+BHK:  2 BHK → दो BHK  |  3 BHK → तीन BHK  |  4 BHK → चार BHK
+""",
+
+"gujarati": """\
+TTS FIELD RULES — ગુજરાતી
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+સોનેરી નિયમ: "tts" field એ "ui" નું બોલાયેલ રૂપ છે.
+
+સંખ્યા પ્રકાર નિર્ણય વૃક્ષ (ઉપરથી નીચે અનુસરો):
+  1. ભાવ — "લાખ"/"કરોડ"/"રૂપિયા" સાથેની સંખ્યા → ગુજરાતી ભાવ શબ્દો
+              44 → ચુમ્માળીસ | 50 → પચાસ | 85 → પંચ્યાસી | 64.99 → ચોસઠ દશાંશ નવ નવ
+  2. મોબાઈલ — બરાબર 10 અંક → એક-એક અંક
+              9876543210 → નવ આઠ સાત છ પાંચ ચાર ત્રણ બે એક શૂન્ય
+  3. પિનકોડ — 6 અંક જે સરનામામાં હોય (શહેર પછી અથવા hyphen પછી)
+              → હંમેશા એક-એક અંક — ક્યારેય નાણાકીય રાશિ તરીકે નહીં
+              500049 → પાંચ શૂન્ય શૂન્ય શૂન્ય ચાર નવ
+              400001 → ચાર શૂન્ય શૂન્ય શૂન્ય શૂન્ય એક
+              380006 → ત્રણ આઠ શૂન્ય શૂન્ય છ
+              ⚠ ભૂલ: 500049 ને "પાંચ લાખ ઓગણ પચાસ" ન કહો — આ પિનકોડ છે
+  4. RERA — "/" segment:
+              Rule A: ફક્ત letters અને length > 5 → શબ્દ
+              Rule B: ≤5 chars અથવા કોઈ digit → character-by-character (English)
+  5. ક્ષેત્ર — 3-4 અંક + "ચો.ફૂ."/"ચોરસ ફૂટ"/"sq ft" → ગુજરાતી ગાણ શબ્દ
+              802 ચો.ફૂ. → આઠ સો બે ચોરસ ફૂટ
+              575 ચો.ફૂ. → પાંચ સો પંચોતેર ચોરસ ફૂટ
+              588 ચો.ફૂ. → પાંચ સો અઠ્ઠ્યાસી ચોરસ ફૂટ
+              774 ચો.ફૂ. → સાત સો ચુમ્યોતેર ચોરસ ફૂટ
+              808 ચો.ફૂ. → આઠ સો આઠ ચોરસ ફૂટ
+  6. અન્ય → ગુજરાતી cardinal શબ્દ
+
+ભાવ (સંપૂર્ણ ઉદાહરણ):
+  Rs. 44 લાખ → રૂપિયા ચુમ્માળીસ લાખ
+  Rs. 50 લાખ → રૂપિયા પચાસ લાખ
+  Rs. 85 લાખ → રૂપિયા પંચ્યાસી લાખ ← "પચાસ" નહીં — "પંચ્યાસી"
+  Rs. 64.99 લાખ → રૂપિયા ચોસઠ દશાંશ નવ નવ લાખ
+
+BHK:  2 BHK → બે BHK  |  3 BHK → ત્રણ BHK  |  4 BHK → ચાર BHK
+""",
+
+"telugu": """\
+TTS FIELD RULES — తెలుగు
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+గోల్డెన్ రూల్: "tts" field అనేది "ui" యొక్క మాట్లాడే రూపం.
+
+సంఖ్య రకాల నిర్ణయ వృక్షం (పైనుండి కిందికి అనుసరించండి):
+  1. ధర — "లక్షలు"/"కోట్లు"/"రూపాయలు" తో సంఖ్య → తెలుగు ధర పదాలు
+              44 → నలభై నాలుగు | 50 → యాభై | 85 → ఎనభై అయిదు | 64.99 → అరవై నాలుగు దశాంశం తొమ్మిది తొమ్మిది
+  2. మొబైల్ — సరిగ్గా 10 అంకెలు → ఒక్కో అంకె
+              9876543210 → తొమ్మిది ఎనిమిది ఏడు ఆరు అయిదు నాలుగు మూడు రెండు ఒకటి సున్న
+  3. పిన్‌కోడ్ — చిరునామాలో 6 అంకెల సంఖ్య (నగరం తర్వాత లేదా హైఫన్ తర్వాత)
+              → ఎల్లప్పుడూ ఒక్కో అంకె — ఎప్పుడూ ద్రవ్య మొత్తంగా చెప్పవద్దు
+              500049 → అయిదు సున్న సున్న సున్న నాలుగు తొమ్మిది
+              ⚠ తప్పు: 500049 ను "అయిదు లక్షల నలభై తొమ్మిది" అని చెప్పవద్దు
+  4. RERA — "/" segment:
+              Rule A: అక్షరాలు మాత్రమే మరియు length > 5 → పదంగా
+              Rule B: ≤5 chars లేదా digit ఉంటే → character-by-character (English)
+  5. విస్తీర్ణం — 3-4 అంకెలు + "చ.అ."/"చదరపు అడుగులు"/"sq ft" → తెలుగు cardinal పదాలు
+              802 చ.అ. → ఎనిమిది వందల రెండు చదరపు అడుగులు
+  6. ఇతరాలు → తెలుగు cardinal పదాలు
+
+ధర (పూర్తి ఉదాహరణలు):
+  Rs. 44 లక్షలు → రూపాయలు నలభై నాలుగు లక్షలు
+  Rs. 85 లక్షలు → రూపాయలు ఎనభై అయిదు లక్షలు ← "యాభై" కాదు
+  Rs. 64.99 లక్షలు → రూపాయలు అరవై నాలుగు దశాంశం తొమ్మిది తొమ్మిది లక్షలు
+
+BHK:  2 BHK → రెండు BHK  |  3 BHK → మూడు BHK  |  4 BHK → నాలుగు BHK
+""",
+
+"tamil": """\
+TTS FIELD RULES — தமிழ்
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+தங்கவிதி: "tts" field என்பது "ui" இன் பேசப்படும் வடிவம்.
+
+எண் வகை முடிவு மரம் (மேலிருந்து கீழாக பின்பற்றுங்கள்):
+  1. விலை — "லட்சம்"/"கோடி"/"ரூபாய்" உடன் எண் → தமிழ் விலை வார்த்தைகள்
+              44 → நாற்பத்து நான்கு | 50 → ஐம்பது | 85 → எண்பத்தைந்து
+  2. மொபைல் — சரியாக 10 இலக்கங்கள் → ஒவ்வொரு இலக்கமாக
+              9876543210 → ஒன்பது எட்டு ஏழு ஆறு ஐந்து நான்கு மூன்று இரண்டு ஒன்று பூஜ்யம்
+  3. பின்கோடு — முகவரியில் 6 இலக்க எண் (நகரத்திற்கு பிறகு அல்லது ஹைஃபன் பிறகு)
+              → எப்போதும் ஒவ்வொரு இலக்கமாக — நிதி தொகையாக சொல்லவே வேண்டாம்
+              500049 → ஐந்து பூஜ்யம் பூஜ்யம் பூஜ்யம் நான்கு ஒன்பது
+              ⚠ தவறு: 500049 ஐ "ஐந்து லட்சத்து நாற்பத்தொன்பது" என்று சொல்லாதீர்கள்
+  4. RERA — "/" segment:
+              Rule A: எழுத்துக்கள் மட்டும் மற்றும் length > 5 → வார்த்தையாக
+              Rule B: ≤5 chars அல்லது digit இருந்தால் → character-by-character (English)
+  5. பரப்பு — 3-4 இலக்கங்கள் + "ச.அ."/"சதுர அடி"/"sq ft" → தமிழ் cardinal வார்த்தைகள்
+              802 ச.அ. → எண்நூற்று இரண்டு சதுர அடி
+  6. மற்றவை → தமிழ் cardinal வார்த்தைகள்
+
+விலை (முழு உதாரணங்கள்):
+  Rs. 44 லட்சம் → ரூபாய் நாற்பத்து நான்கு லட்சம்
+  Rs. 85 லட்சம் → ரூபாய் எண்பத்தைந்து லட்சம் ← "ஐம்பது" அல்ல
+  Rs. 64.99 லட்சம் → ரூபாய் அறுபத்து நான்கு புள்ளி ஒன்பது ஒன்பது லட்சம்
+
+BHK:  2 BHK → இரண்டு BHK  |  3 BHK → மூன்று BHK  |  4 BHK → நான்கு BHK
+""",
 }
 
-_SYSTEM_PROMPT_TEMPLATE = """You are Aarya, a warm property sales advisor for Pacifica Companies.
+# ─────────────────────────────────────────────────────────────────────────────
+#  SECTION 6B — SYSTEM PROMPT
+# ─────────────────────────────────────────────────────────────────────────────
 
-════════════════════════════════════════
-STRICT RAG-ONLY POLICY
-════════════════════════════════════════
-Answer EXCLUSIVELY from the PROPERTY CONTEXT below.
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are Aarya, a warm and professional property sales advisor for Pacifica Companies.
 
-Rules:
-1. If the answer IS in PROPERTY CONTEXT → answer clearly and warmly.
-2. If the answer is NOT in context → say only: "I'm sorry, I don't have that detail right now. Please reach out to our team directly!"
-   NEVER say "for all projects" or generalise — you are focused on the selected property/properties.
-3. NEVER invent prices, RERA numbers, distances, amenities, or any fact.
-4. Do NOT use phrases like "typically", "usually", "in general".
+━━━ RAG-ONLY POLICY ━━━
+Answer EXCLUSIVELY from PROPERTY CONTEXT below.
+• Answer IS in context → answer clearly and warmly.
+• Answer NOT in context → say ONLY: "I'm sorry, I don't have that detail right now. Please reach out to our team directly!"
+• NEVER invent prices, RERA numbers, areas, distances, or amenities.
+• Do NOT use "typically", "usually", "in general".
 
-SINGLE PROPERTY RULE:
-When context has only one === section ===, answer ONLY about that property.
-Never say "I don't have details for all projects" — you only have ONE project. Just answer it.
+━━━ PROPERTY NAME RULE ━━━
+Every factual answer MUST mention the property name.
+✓ "At Amara, the 2 BHK starts from Rs. 44 lakhs."
+✓ "Aavaas Hyderabad is located at Bollaram Road, Miyapur."
+✗ "The price starts from Rs. 44 lakhs." ← missing property name, WRONG
 
-COMPARISON RULE:
-When context has multiple === sections ===:
-- Scan all sections for the requested data point.
-- State ONLY the winner (lowest/highest). Do not list all properties.
-- Example: "The lowest 2 BHK price is at Madrid County starting from Rs. 41.14 lakhs."
+━━━ SINGLE vs MULTI PROPERTY ━━━
+SINGLE (one === section ===): answer ONLY about that property, always name it.
+COMPARISON (multiple === sections ===): list key facts per property clearly.
 
-ONBOARDING:
-- __GREETING__: If name unknown → introduce as Aarya, ask name. If name known → welcome back by name.
-- When name given → thank them, ask phone number.
-- Once name+phone collected → never ask again.
+━━━ ONBOARDING ━━━
+• __GREETING__: name unknown → introduce as Aarya, ask name. Name known → welcome back by name.
+• When name given → thank, ask phone. Once both collected → never ask again.
 
-RERA FORMAT (ui field):
-Write RERA exactly as in source: PR/GJ/GANDHINAGAR/AUDA/RAA04324/A1R/211021
-Never break it into P R, G J... in the ui field.
+━━━ RERA FORMAT ━━━
+ui field: exact slash-format — PR/GJ/GANDHINAGAR/AUDA/RAA04324/A1R/211021
 
-STYLE:
-- Warm, natural sentences. No bullet points.
-- 3–5 sentences max unless user asks for more.
-- End with a gentle follow-up question when appropriate.
+━━━ STYLE ━━━
+Warm sentences. No bullets. 3–5 sentences max unless asked for more. End with a follow-up question.
 
-════════════════════════════════════════
-OUTPUT FORMAT — MANDATORY JSON
-════════════════════════════════════════
-You MUST respond with ONLY a valid JSON object — no markdown, no extra text, no ```json fences.
-Format:
-{{
-  "ui": "<response in {language} with raw numbers, Rs. notation, RERA codes as-is>",
-  "tts": "<same response in {language} with ALL numbers as words — see TTS RULES below>"
-}}
+━━━ OUTPUT — MANDATORY JSON ━━━
+Two-step process:
+  STEP 1 → Write "ui": factual answer in {language}, with raw numbers and symbols.
+            For addresses/pincodes: keep as-is (e.g. Hyderabad-500049).
+  STEP 2 → Write "tts": copy "ui" word-for-word, apply NUMBER TYPE DECISION TREE.
+            CRITICAL: apply the correct rule for each number type — pincode ≠ price.
 
-The "ui" field is displayed to the user exactly as written.
-The "tts" field is sent to speech synthesis — every number must be spelled out as words.
-Both fields must carry the SAME information and the SAME language.
+Output format (no markdown, no fences):
+{{"ui": "<{language} — raw numbers, RERA slash-format>", "tts": "<{language} — numbers as spoken words per decision tree>"}}
 
 {tts_rules}
 
-════════════════════════════════════════
-LANGUAGE
-════════════════════════════════════════
-Write BOTH "ui" and "tts" fields entirely in: {language_upper}
-Exception: RERA codes in "ui" stay in slash format. In "tts" they are spoken char-by-char."""
+LANGUAGE: Both fields entirely in {language_upper}.
+"""
 
 _LANG_INSTRUCTION = {
     "english":  "MANDATORY: Both fields in English only.",
-    "hindi":    "अनिवार्य: दोनों fields पूरी तरह हिंदी में।",
-    "gujarati": "ફરજિયાત: બંને fields સંપૂર્ણ ગુજરાતીમાં.",
-    "telugu":   "తప్పనిసరి: రెండు fields తెలుగులో మాత్రమే.",
-    "tamil":    "கட்டாயம்: இரண்டு fields தமிழில் மட்டுமே.",
+    "hindi":    "अनिवार्य: दोनों fields पूरी तरह हिंदी में। पिनकोड को मौद्रिक राशि मत समझें।",
+    "gujarati": "ફરજિયાત: બંને fields સંપૂર્ણ ગુજરાતીમાં. પિનકોડ ને ભાવ તરીકે ન ગણો — અંક-દ-અંક બોલો.",
+    "telugu":   "తప్పనిసరి: రెండు fields తెలుగులో మాత్రమే. పిన్‌కోడ్‌ను ద్రవ్య మొత్తంగా చెప్పవద్దు.",
+    "tamil":    "கட்டாயம்: இரண்டு fields தமிழில் மட்டுமே. பின்கோடை நிதி தொகையாக சொல்லாதீர்கள்.",
 }
 
 _LANG_STARTER = {
@@ -576,13 +915,13 @@ def _build_messages(
     query: str, output_language: str, chat_history: Optional[List[dict]],
     context_chunks: List[str] = None, context_map: Optional[dict] = None,
     user_name: str = "", user_phone: str = "",
+    intent: QueryIntent = "GENERAL",
 ) -> list:
 
-    is_onboard = query.strip() in {
-        "__GREETING__", "__ASK_PHONE__", "__PHONE_SKIP__", "__PHONE_DONE__"}
-    is_comparison = _is_comparison_query(query)
+    ONBOARD_KEYS = {"__GREETING__", "__ASK_PHONE__", "__PHONE_SKIP__", "__PHONE_DONE__"}
+    is_onboard   = query.strip() in ONBOARD_KEYS
 
-    if is_onboard:
+    if is_onboard or intent == "SKIP":
         context_str = "[ONBOARDING — NO PROPERTY CONTEXT NEEDED]"
     elif context_map:
         parts = []
@@ -596,7 +935,7 @@ def _build_messages(
     else:
         context_str = "[NO_CONTEXT_AVAILABLE]"
 
-    lang     = output_language.lower()
+    lang      = output_language.lower()
     tts_rules = _TTS_NUMBER_RULES.get(lang, _TTS_NUMBER_RULES["english"])
 
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
@@ -612,9 +951,9 @@ def _build_messages(
     system_content = f"{system_prompt}\n\n{user_ctx}\n\nPROPERTY CONTEXT:\n{context_str}"
     messages = [{"role": "system", "content": system_content}]
 
+    history_limit = 4 if intent == "COMPARE" else 6
     if chat_history:
-        # Convert stored history: if assistant turns have JSON, show only ui text
-        for h in chat_history[-8:]:
+        for h in chat_history[-history_limit:]:
             if h["role"] == "assistant":
                 try:
                     parsed = json.loads(h["content"])
@@ -626,11 +965,11 @@ def _build_messages(
                 messages.append(h)
 
     comparison_note = ""
-    if is_comparison:
+    if intent == "COMPARE":
         comparison_note = (
             "[COMPARISON QUERY] Scan ALL === sections ===. "
-            "Answer ONLY with the winner property and its price. "
-            "Do NOT list all properties.\n\n"
+            "For each property state its name and the relevant price/detail. "
+            "Be concise — one line per property.\n\n"
         )
 
     lang_note = _LANG_INSTRUCTION.get(lang, _LANG_INSTRUCTION["english"])
@@ -638,8 +977,14 @@ def _build_messages(
         "role": "user",
         "content": (
             f"[{lang_note}]\n"
-            f"[OUTPUT: Respond ONLY with a JSON object {{\"ui\": ..., \"tts\": ...}}]\n"
-            f"[RERA in ui: slash format only — PR/GJ/... Never break it]\n"
+            f"[OUTPUT: Respond ONLY with JSON {{\"ui\": ..., \"tts\": ...}}]\n"
+            f"[STEP 1: Write ui with exact numbers as-is. "
+            f"STEP 2: Write tts — apply NUMBER TYPE DECISION TREE. "
+            f"Pincode (6-digit in address) = digit-by-digit. "
+            f"Price (before lakh/crore) = currency words. "
+            f"Mobile (10-digit) = digit-by-digit. "
+            f"Area sqft (3-4 digit + sqft) = cardinal words.]\n"
+            f"[RERA in ui: slash format. In tts: per segment rules.]\n"
             f"{comparison_note}"
             f"{query}"
         )
@@ -647,31 +992,18 @@ def _build_messages(
 
     starter = _LANG_STARTER.get(lang, "")
     if starter:
-        # Prime the assistant to start with the correct language
         messages.append({"role": "assistant",
                          "content": f'{{"ui": "{starter}'})
-
     return messages
 
 
 def _parse_llm_json(raw: str) -> tuple[str, str]:
-    """
-    Parse the dual-output JSON from LLM.
-    Returns (ui_text, tts_text).
-    Falls back gracefully if JSON is malformed.
-    """
-    # If we primed the assistant, the raw starts from after the opening brace
-    # The full JSON may be: {"ui": "...", "tts": "..."} or just the continuation
     text = raw.strip()
-
-    # Try direct parse first
     try:
         parsed = json.loads(text)
         return parsed.get("ui", text), parsed.get("tts", text)
     except json.JSONDecodeError:
         pass
-
-    # Strip markdown fences if present
     text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'\s*```$', '', text, flags=re.MULTILINE).strip()
     try:
@@ -679,16 +1011,12 @@ def _parse_llm_json(raw: str) -> tuple[str, str]:
         return parsed.get("ui", text), parsed.get("tts", text)
     except json.JSONDecodeError:
         pass
-
-    # Try extracting ui/tts with regex
     ui_m  = re.search(r'"ui"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
     tts_m = re.search(r'"tts"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
     if ui_m and tts_m:
         ui  = ui_m.group(1).replace('\\"', '"').replace('\\n', '\n')
         tts = tts_m.group(1).replace('\\"', '"').replace('\\n', '\n')
         return ui, tts
-
-    # Last resort: return raw as both
     log.warning("LLM JSON parse failed — using raw text for both ui and tts")
     return text, text
 
@@ -699,59 +1027,58 @@ async def llm_answer(
     context_chunks: List[str] = None,
     context_map: Optional[dict] = None,
     user_name: str = "", user_phone: str = "",
+    intent: QueryIntent = "GENERAL",
 ) -> tuple[str, str]:
-    """
-    Single LLM call.
-    Returns (ui_text, tts_text).
-    """
     messages = _build_messages(
         query, output_language, chat_history,
-        context_chunks, context_map, user_name, user_phone)
+        context_chunks, context_map, user_name, user_phone, intent)
+
+    ctx_chars = (
+        sum(sum(len(c) for c in chunks) for chunks in context_map.values())
+        if context_map else sum(len(c) for c in (context_chunks or []))
+    )
 
     log.info("=" * 70)
     log.info("LLM INPUT — query: %s", query[:300])
-    log.info("LLM INPUT — language: %s | user: %s | phone_known: %s",
-             output_language, user_name or "[unknown]", bool(user_phone))
+    log.info("LLM INPUT — intent: %s | lang: %s | user: %s | phone_known: %s",
+             intent, output_language, user_name or "[unknown]", bool(user_phone))
     if context_map:
         for cid, chunks in context_map.items():
-            log.info("LLM INPUT — context[%s]: %d chunks, ~%d chars",
-                     cid, len(chunks), sum(len(c) for c in chunks))
+            log.info("  ctx[%s]: %d chunks ~%d chars", cid, len(chunks), sum(len(c) for c in chunks))
     elif context_chunks:
-        log.info("LLM INPUT — context_chunks: %d, ~%d chars",
-                 len(context_chunks), sum(len(c) for c in context_chunks))
+        log.info("  ctx_chunks: %d ~%d chars", len(context_chunks), ctx_chars)
     else:
-        log.info("LLM INPUT — context: [NONE]")
+        log.info("  ctx: [NONE — SKIP/ONBOARD]")
     log.info("LLM INPUT — history turns: %d", len(chat_history or []))
 
     resp = await _openai.chat.completions.create(
         model="gpt-4o",
         messages=messages,
-        max_tokens=800,
+        max_tokens=600,
         temperature=0.1,
-        response_format={"type": "json_object"},   # force JSON mode
+        response_format={"type": "json_object"},
     )
-    raw = resp.choices[0].message.content.strip()
-    log.info("LLM OUTPUT (raw): %s", raw[:500])
-    log.info("LLM OUTPUT — tokens: prompt=%d completion=%d total=%d",
-             resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.total_tokens)
+    raw   = resp.choices[0].message.content.strip()
+    p_tok = resp.usage.prompt_tokens
+    c_tok = resp.usage.completion_tokens
+    t_tok = resp.usage.total_tokens
+    log.info("LLM OUTPUT — tokens: prompt=%d completion=%d total=%d  (~$%.4f @ gpt-4o)",
+             p_tok, c_tok, t_tok, (p_tok * 2.5 + c_tok * 10) / 1_000_000)
+    log.info("LLM RAW: %s", raw[:400])
     log.info("=" * 70)
 
     ui_text, tts_text = _parse_llm_json(raw)
-
-    # Normalise RERA in ui_text only (tts_text already has spoken form from LLM)
     ui_text = normalise_rera(ui_text)
 
-    log.info("UI  TEXT: %s", ui_text[:300])
-    log.info("TTS TEXT: %s", tts_text[:300])
-
+    log.info("UI : %s", ui_text[:300])
+    log.info("TTS: %s", tts_text[:300])
     return ui_text, tts_text
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SECTION 7 — TTS  (minimal post-processing — LLM handles numbers)
+#  SECTION 7 — TTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _split_tts(text: str, limit: int = 490) -> List[str]:
-    """Split on sentence boundaries, never exceed limit chars (Sarvam max=500)."""
     sentences = re.split(r"(?<=[।.!?])\s+", text.strip())
     chunks, current = [], ""
     for s in sentences:
@@ -769,22 +1096,15 @@ def _split_tts(text: str, limit: int = 490) -> List[str]:
     return chunks or [text[:limit]]
 
 def _tts_cleanup(text: str, language: str) -> str:
-    """
-    Light cleanup only — LLM already produced spoken-form numbers in tts field.
-    We only strip markdown symbols and fix Gujarati punctuation.
-    """
-    # Strip markdown
     text = re.sub(r'[*#~`\[\]{}]', '', text)
     text = re.sub(r'={2,}', '', text)
     text = re.sub(r'-{2,}', ', ', text)
     text = re.sub(r'\.{2,}', '. ', text)
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'&amp;', ' and ', text)
-
     if language == "gujarati":
         text = re.sub(r"\([A-Za-z0-9\s,\.]+\)", "", text)
         text = re.sub(r"\s*।\s*", "। ", text)
-
     text = re.sub(r"[ \t]{2,}", " ", text).strip()
     return text
 
@@ -796,7 +1116,7 @@ def _get_http() -> httpx.AsyncClient:
     if _http_client is None or _http_client.is_closed:
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(40.0, connect=5.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20))
     return _http_client
 
 async def sarvam_stt(audio_bytes: bytes, audio_format: str = "webm") -> str:
@@ -834,22 +1154,18 @@ async def _tts_chunk(text: str, lang_code: str, speaker: str) -> bytes:
 async def sarvam_tts(tts_text: str, language: str = "english") -> bytes:
     lang_code = _LANG_CODE.get(language.lower(), "en-IN")
     speaker   = _LANG_SPEAKER.get(language.lower(), "ritu")
-
     processed = _tts_cleanup(tts_text, language)
     log.info("TTS INPUT (original) : %s", tts_text[:400])
     log.info("TTS INPUT (processed): %s", processed[:400])
-
     chunks = _split_tts(processed)
     log.info("TTS REQUEST — %d chunk(s) | lang=%s | speaker=%s | model=%s",
              len(chunks), lang_code, speaker, cfg.sarvam_tts_model)
     for i, ch in enumerate(chunks):
         log.info("TTS CHUNK[%d]: %s", i, ch[:200])
-
     if len(chunks) == 1:
         wav = await _tts_chunk(chunks[0], lang_code, speaker)
         log.info("TTS RESPONSE — single chunk, wav size=%d bytes", len(wav))
         return wav
-
     wav_parts = await asyncio.gather(*[_tts_chunk(c, lang_code, speaker) for c in chunks])
     first           = wav_parts[0]
     sample_rate     = int.from_bytes(first[24:28], "little")
@@ -874,7 +1190,7 @@ async def sarvam_tts(tts_text: str, language: str = "english") -> bytes:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Startup — initialising DB and ingesting documents …")
+    log.info("Startup — PropVoice v6.0.0 — initialising DB and ingesting documents …")
     Path(cfg.rag_dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.chroma_persist_dir).mkdir(parents=True, exist_ok=True)
     init_db()
@@ -889,7 +1205,7 @@ async def lifespan(app: FastAPI):
         await _http_client.aclose()
     log.info("Shutdown complete.")
 
-app = FastAPI(title="PropVoice — Pacifica Companies RAG API", version="4.0.0",
+app = FastAPI(title="PropVoice — Pacifica Companies RAG API", version="6.0.0",
               lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
@@ -917,6 +1233,7 @@ class ChatResponse(BaseModel):
     pdf_id:          Optional[str]   = None
     pdf_ids:         Optional[List[str]] = None
     output_language: str
+    intent:          str             = "GENERAL"
 
 
 async def _handle_query(
@@ -924,17 +1241,15 @@ async def _handle_query(
     pdf_id: str = "", pdf_ids_str: str = "",
     pdf_ids_list: Optional[List[str]] = None,
 ) -> ChatResponse:
-    """
-    Core handler shared by /api/chat and /api/voice.
-    Single LLM call → (ui_text, tts_text) → TTS → ChatResponse.
-    """
     user    = db_get_user(session_id)
     u_name  = user.get("name", "")
     u_phone = user.get("phone", "")
 
     ONBOARD = {"__GREETING__", "__ASK_PHONE__", "__PHONE_SKIP__", "__PHONE_DONE__"}
 
-    # Build target collection list
+    intent = "ONBOARD" if query.strip() in ONBOARD else classify_query(query)
+    log.info("INTENT: %s | query: %s", intent, query[:100])
+
     target_ids: List[str] = []
     if pdf_ids_list:
         target_ids = pdf_ids_list
@@ -946,28 +1261,25 @@ async def _handle_query(
         target_ids = [d["id"] for d in rag_list_docs()]
 
     loop = asyncio.get_event_loop()
-    context_chunks: List[str]     = []
+    context_chunks: List[str]      = []
     context_map:    Optional[dict] = None
 
-    if query in ONBOARD:
-        pass  # no RAG for onboarding
+    if intent in ("SKIP", "ONBOARD"):
+        pass
     elif len(target_ids) == 1:
-        # Single property: fetch ALL chunks for complete context
         context_chunks = await loop.run_in_executor(
-            None, rag_retrieve, target_ids[0], query)
+            None, rag_retrieve, target_ids[0], query, intent)
     elif len(target_ids) > 1:
         context_map = await loop.run_in_executor(
-            None, lambda: rag_retrieve_multi(target_ids, query))
+            None, lambda: rag_retrieve_multi(target_ids, query, intent))
 
     history = db_get_history(session_id, limit=10)
     db_save_turn(session_id, "user", query, output_language, ",".join(target_ids))
 
-    # ONE LLM CALL — returns (ui_text, tts_text)
     ui_text, tts_text = await llm_answer(
         query, output_language, history,
-        context_chunks, context_map, u_name, u_phone)
+        context_chunks, context_map, u_name, u_phone, intent)
 
-    # Store the JSON so history reconstruction works
     stored_content = json.dumps({"ui": ui_text, "tts": tts_text}, ensure_ascii=False)
     db_save_turn(session_id, "assistant", stored_content, output_language, ",".join(target_ids))
 
@@ -985,6 +1297,7 @@ async def _handle_query(
         pdf_id=pdf_id or None,
         pdf_ids=target_ids if len(target_ids) > 1 else None,
         output_language=output_language,
+        intent=intent,
     )
 
 
@@ -993,11 +1306,11 @@ async def serve_index():
     idx = _static_dir / "index.html"
     if idx.exists():
         return FileResponse(str(idx), media_type="text/html")
-    return {"message": "PropVoice API v4 running.", "docs": "/docs"}
+    return {"message": "PropVoice API v6 running.", "docs": "/docs"}
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "4.0.0"}
+    return {"status": "ok", "version": "6.0.0"}
 
 @app.get("/api/pdfs")
 async def get_pdfs():
@@ -1054,7 +1367,6 @@ async def voice_endpoint(
 
 @app.get("/api/history/{session_id}", tags=["Users"])
 async def get_history(session_id: str):
-    # Return ui text only (not raw JSON)
     raw_history = db_get_history(session_id, limit=50)
     clean = []
     for h in raw_history:
@@ -1071,12 +1383,12 @@ async def get_history(session_id: str):
 @app.post("/api/ingest", tags=["Admin"])
 async def ingest_all(background_tasks: BackgroundTasks):
     background_tasks.add_task(rag_ingest_all)
-    return {"message": "Ingestion started"}
+    return {"message": "Ingestion started — will re-tag all chunks with schema_version=2"}
 
 @app.delete("/api/cache", tags=["Admin"])
 async def clear_cache():
-    n = len(_rag_cache)
-    _rag_cache.clear()
+    n = len(_embed_cache)
+    _embed_cache.clear()
     return {"cleared": n}
 
 if __name__ == "__main__":
